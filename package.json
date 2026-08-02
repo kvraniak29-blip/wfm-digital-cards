@@ -1,0 +1,21 @@
+{
+  "name": "wfm-digital-cards",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "validate": "node scripts/validate-data.mjs",
+    "build": "node scripts/build.mjs",
+    "test": "node tests/build.test.mjs",
+    "serve": "node scripts/serve.mjs",
+    "add-broker": "node scripts/add-broker.mjs",
+    "build:netlify": "node scripts/build.mjs --target netlify",
+    "build:github-pages": "node scripts/build.mjs --target github-pages"
+  },
+  "devDependencies": {
+    "jsqr": "^1.4.0",
+    "pngjs": "^7.0.0",
+    "qrcode": "^1.5.4",
+    "sharp": "^0.34.3"
+  }
+}

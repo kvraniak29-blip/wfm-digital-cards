@@ -1,0 +1,13 @@
+{
+  "name": "WFM Reality",
+  "website": "https://www.wfmreality.sk/",
+  "facebook": "https://www.facebook.com/WFMReality/",
+  "instagram": "https://www.instagram.com/wfmreality.sk/",
+  "theme": {
+    "primary": "#0b253d",
+    "secondary": "#23a8a0",
+    "background": "#071d31",
+    "surface": "#ffffff",
+    "text": "#ffffff"
+  }
+}

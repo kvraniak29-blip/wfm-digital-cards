@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="sk">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{companyName}} | Digitálne vizitky</title>
+  <meta name="description" content="Digitálne NFC vizitky maklérov {{companyName}}.">
+  <link rel="canonical" href="{{rootUrl}}">
+  <link rel="icon" href="{{assetPrefix}}/assets/favicon.svg" type="image/svg+xml">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="{{companyName}} | Digitálne vizitky">
+  <meta property="og:description" content="Zoznam aktívnych digitálnych NFC vizitiek maklérov {{companyName}}.">
+  <meta property="og:url" content="{{rootUrl}}">
+  <meta name="theme-color" content="#071d31">
+  <link rel="stylesheet" href="{{assetPrefix}}/assets/styles.css">
+</head>
+<body>
+  <main class="page">
+    <section class="index-panel" aria-labelledby="index-title">
+      <header class="brand">
+        <div class="brand-mark" aria-label="{{companyName}}">
+          <span class="brand-symbol" aria-hidden="true">W</span>
+          <span>{{companyName}}</span>
+        </div>
+        <span class="badge">Digitálne vizitky</span>
+      </header>
+      <h1 class="index-title" id="index-title">Makléri {{companyName}}</h1>
+      <p class="index-copy">Aktívne NFC vizitky pripravené na uloženie kontaktu, volanie a zdieľanie.</p>
+      <ul class="broker-list">
+        {{brokerList}}
+      </ul>
+    </section>
+  </main>
+  <script src="{{assetPrefix}}/assets/script.js" defer></script>
+</body>
+</html>

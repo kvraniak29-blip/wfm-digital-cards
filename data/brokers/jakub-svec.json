@@ -1,0 +1,19 @@
+{
+  "active": true,
+  "slug": "jakub-svec",
+  "firstName": "Jakub",
+  "lastName": "Švec",
+  "displayName": "Jakub Švec",
+  "title": "Realitný maklér",
+  "company": "WFM Reality",
+  "phoneDisplay": "+421 904 882 685",
+  "phoneE164": "+421904882685",
+  "email": "jakub.svec@wfmreality.sk",
+  "website": "https://www.wfmreality.sk/",
+  "whatsapp": "https://wa.me/421904882685",
+  "photo": "assets/brokers/jakub-svec/photo.jpg",
+  "social": {
+    "facebook": null,
+    "instagram": null
+  }
+}

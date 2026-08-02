@@ -1,0 +1,13 @@
+{
+  "netlify": {
+    "siteUrl": "https://wfm-digital-cards.netlify.app",
+    "basePath": "",
+    "siteId": "6103c4f1-b7ba-428c-93c5-ae947cbd9232",
+    "projectUrl": "https://app.netlify.com/projects/wfm-digital-cards"
+  },
+  "github-pages": {
+    "siteUrl": "https://kvraniak29-blip.github.io/wfm-digital-cards",
+    "basePath": "/wfm-digital-cards",
+    "repository": "kvraniak29-blip/wfm-digital-cards"
+  }
+}

@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="sk">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{title}}</title>
+  <meta name="description" content="{{description}}">
+  <link rel="canonical" href="{{canonicalUrl}}">
+  <link rel="icon" href="{{assetPrefix}}/assets/favicon.svg" type="image/svg+xml">
+  <meta property="og:type" content="profile">
+  <meta property="og:title" content="{{ogTitle}}">
+  <meta property="og:description" content="{{ogDescription}}">
+  <meta property="og:url" content="{{canonicalUrl}}">
+  <meta property="og:image" content="{{ogImage}}">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="{{ogTitle}}">
+  <meta name="twitter:description" content="{{ogDescription}}">
+  <meta name="twitter:image" content="{{ogImage}}">
+  <meta name="theme-color" content="#071d31">
+  <link rel="stylesheet" href="{{assetPrefix}}/assets/styles.css">
+</head>
+<body>
+  <main class="page">
+    <article class="card" aria-labelledby="card-title">
+      <header class="brand">
+        <div class="brand-mark" aria-label="{{companyName}}">
+          <span class="brand-symbol" aria-hidden="true">W</span>
+          <span>{{companyName}}</span>
+        </div>
+        <span class="badge">NFC vizitka</span>
+      </header>
+      <section class="profile">
+        <div class="photo-wrap">
+          <img class="photo" src="./photo.jpg" alt="Profilová fotografia: {{displayName}}" width="800" height="800">
+        </div>
+        <h1 id="card-title">{{displayName}}</h1>
+        <p class="role">{{brokerTitle}}</p>
+      </section>
+      <nav class="actions" aria-label="Kontaktné akcie">
+        {{buttons}}
+      </nav>
+      <div class="meta" aria-label="Kontaktné údaje">
+        <span>{{phoneDisplay}}</span>
+        <span>{{email}}</span>
+        <span>{{website}}</span>
+      </div>
+      <section class="qr-panel" aria-labelledby="qr-title">
+        <a class="qr-link" href="./qr.png" download aria-label="Stiahnuť QR kód vizitky {{displayName}}">
+          <img src="./qr.png" alt="QR kód smerujúci na verejnú URL vizitky {{displayName}}" width="520" height="520">
+        </a>
+        <p id="qr-title">QR kód pre túto vizitku</p>
+      </section>
+    </article>
+  </main>
+  <script src="{{assetPrefix}}/assets/script.js" defer></script>
+</body>
+</html>

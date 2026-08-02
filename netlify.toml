@@ -1,0 +1,8 @@
+[build]
+  command = "npm run build:netlify"
+  publish = "dist"
+
+[[redirects]]
+  from = "/"
+  to = "/jakub-svec/"
+  status = 302
