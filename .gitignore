@@ -1,6 +1,7 @@
 node_modules/
 work/
 outputs/
+logs/
 .netlify/
 dist/
 .env

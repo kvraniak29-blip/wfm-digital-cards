@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import sharp from "sharp";
 import jsQR from "jsqr";
 import { PNG } from "pngjs";
@@ -20,6 +20,16 @@ await test("validácia JSON, company.json a branding", async () => {
   const brokers = await loadBrokers();
   assert.equal(validateAll(company, brokers, { requirePhotos: false }).length, 0);
   assert.deepEqual(await validateBranding(company), []);
+});
+
+await test("Windows PowerShell generátor je uložený ako UTF-8 BOM", async () => {
+  const ps1 = await fs.readFile(path.join(root, "tools", "WFM-Card-Generator.ps1"));
+  assert.equal(ps1[0], 0xef);
+  assert.equal(ps1[1], 0xbb);
+  assert.equal(ps1[2], 0xbf);
+  const text = ps1.toString("utf8");
+  assert.ok(!text.includes("ArgumentList.Add"));
+  assert.ok(!text.includes("Invoke-Expression"));
 });
 
 await test("validácia fotografií", async () => {
@@ -99,6 +109,31 @@ await test("build pre Netlify", async () => {
 await test("build pre GitHub Pages a zachovanie Jakubovej URL", async () => {
   execFileSync(process.execPath, ["scripts/build.mjs", "--target", "github-pages"], { cwd: root, stdio: "pipe" });
   await verifyBuild("github-pages", "https://kvraniak29-blip.github.io/wfm-digital-cards/jakub-svec/");
+});
+
+await test("lokálny HTTP server podporuje GitHub Pages basePath", async () => {
+  execFileSync(process.execPath, ["scripts/build.mjs", "--target", "github-pages"], { cwd: root, stdio: "pipe" });
+  const previewPort = 4187;
+  const previewRoot = `http://127.0.0.1:${previewPort}`;
+  const child = spawn(process.execPath, ["scripts/serve.mjs"], { cwd: root, env: { ...process.env, PORT: String(previewPort) }, stdio: "pipe" });
+  try {
+    await waitForHttp(`${previewRoot}/wfm-digital-cards/`);
+    for (const url of [
+      `${previewRoot}/wfm-digital-cards/`,
+      `${previewRoot}/wfm-digital-cards/assets/styles.css`,
+      `${previewRoot}/wfm-digital-cards/assets/branding/logo.png`,
+      `${previewRoot}/wfm-digital-cards/assets/branding/background.png`,
+      `${previewRoot}/wfm-digital-cards/jakub-svec/`
+    ]) {
+      const response = await fetch(url);
+      assert.equal(response.status, 200, url);
+    }
+    const missing = await fetch(`${previewRoot}/wfm-digital-cards/%2e%2e/package.json`);
+    assert.notEqual(missing.status, 200);
+  } finally {
+    child.kill();
+    await new Promise((resolve) => child.once("exit", resolve));
+  }
 });
 
 await cleanupTestBroker();
@@ -217,4 +252,18 @@ function decodeQr(buffer) {
   const code = jsQR(Uint8ClampedArray.from(png.data), png.width, png.height);
   assert.ok(code, "QR sa nedá dekódovať");
   return code.data;
+}
+
+async function waitForHttp(url) {
+  let lastError;
+  for (let i = 0; i < 40; i += 1) {
+    try {
+      const response = await fetch(url);
+      if (response.status === 200) return;
+    } catch (error) {
+      lastError = error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  throw lastError || new Error(`Server neodpovedá: ${url}`);
 }
