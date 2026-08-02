@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import sharp from "sharp";
+import crypto from "node:crypto";
 
 export const root = process.cwd();
 export const distDir = path.join(root, "dist");
@@ -67,6 +68,16 @@ export function resolveSocial(broker, company, key) {
   return broker.social?.[key] || company[key] || null;
 }
 
+export function slugify(value) {
+  return String(value)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+}
+
 export function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, (char) => ({
     "&": "&amp;",
@@ -110,6 +121,23 @@ export async function ensureJpegPhoto(source, dest) {
   await fs.mkdir(path.dirname(dest), { recursive: true });
   await fs.copyFile(input, dest);
   return { input, width: meta.width, height: meta.height };
+}
+
+export async function normalizePhoto(sourceFile, dest) {
+  const meta = await sharp(sourceFile).metadata();
+  if (!meta.width || !meta.height) throw new Error(`Fotografia sa nedá spracovať: ${sourceFile}`);
+  await fs.mkdir(path.dirname(dest), { recursive: true });
+  await sharp(sourceFile)
+    .rotate()
+    .resize({ width: 1200, height: 1200, fit: "inside", withoutEnlargement: true })
+    .jpeg({ quality: 90, mozjpeg: true })
+    .toFile(dest);
+  const out = await fs.readFile(dest);
+  if (out[0] !== 0xff || out[1] !== 0xd8) throw new Error(`Normalizovaná fotografia nie je JPEG: ${dest}`);
+}
+
+export async function sha256File(file) {
+  return crypto.createHash("sha256").update(await fs.readFile(file)).digest("hex");
 }
 
 export async function writeText(file, content) {

@@ -9,6 +9,8 @@
     "test": "node tests/build.test.mjs",
     "serve": "node scripts/serve.mjs",
     "add-broker": "node scripts/add-broker.mjs",
+    "inspect-broker": "node scripts/inspect-broker-folder.mjs",
+    "import-broker": "node scripts/import-broker.mjs",
     "build:netlify": "node scripts/build.mjs --target netlify",
     "build:github-pages": "node scripts/build.mjs --target github-pages"
   },

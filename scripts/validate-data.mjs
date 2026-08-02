@@ -19,7 +19,7 @@ export function validateAll(company, brokers, options = {}) {
 }
 
 export function validateCompany(company, errors) {
-  for (const key of ["name", "website", "facebook", "instagram"]) {
+  for (const key of ["name", "website", "facebook", "instagram", "logo", "background"]) {
     if (!company[key]) errors.push(`company.json chýba pole ${key}`);
   }
   for (const key of ["website", "facebook", "instagram"]) {
@@ -55,10 +55,27 @@ export async function validatePhotos(brokers) {
   return errors;
 }
 
+export async function validateBranding(company) {
+  const errors = [];
+  for (const key of ["logo", "background"]) {
+    const file = company[key];
+    try {
+      await fs.access(path.join(root, file));
+      const meta = await sharp(path.join(root, file)).metadata();
+      if (meta.format !== "png") errors.push(`${key} musí byť PNG: ${file}`);
+      if (!meta.width || !meta.height) errors.push(`${key} sa nedá načítať: ${file}`);
+    } catch {
+      errors.push(`Branding súbor chýba: ${file}`);
+    }
+  }
+  return errors;
+}
+
 if (isMain) {
   const company = await loadCompany();
   const brokers = await loadBrokers();
   const errors = validateAll(company, brokers, { requirePhotos: false });
+  errors.push(...await validateBranding(company));
   if (errors.length) {
     for (const error of errors) console.error(`FAIL ${error}`);
     process.exit(1);

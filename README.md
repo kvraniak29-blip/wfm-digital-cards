@@ -7,7 +7,10 @@ Statický systém digitálnych NFC vizitiek pre realitných maklérov WFM Realit
 - `config/company.json` - spoločná firemná konfigurácia, farby a sociálne siete.
 - `config/deployment.json` - URL nastavenia pre Netlify a GitHub Pages.
 - `data/brokers/*.json` - zdroj pravdy pre každého makléra.
+- `data/status/*.json` - stav posledného generovania konkrétneho makléra.
 - `assets/brokers/<slug>/photo.jpg` - profilová fotografia makléra.
+- `assets/branding/logo.png` - spoločné logo WFM Reality.
+- `assets/branding/background.png` - spoločné pozadie vizitiek.
 - `src/broker-template.html` - spoločná HTML šablóna vizitky.
 - `src/index-template.html` - spoločná HTML šablóna koreňovej stránky.
 - `src/styles.css` - spoločný dizajn.
@@ -16,6 +19,70 @@ Statický systém digitálnych NFC vizitiek pre realitných maklérov WFM Realit
 - `dist/` - výsledok buildu pripravený na hosting.
 
 Kontaktné údaje sa nemenia ručne v HTML, VCF ani QR. Zdrojom pravdy je JSON makléra.
+
+## Bežné použitie cez Windows aplikáciu
+
+Spustite:
+
+```powershell
+.\Spustit-WFM-Generator.cmd
+```
+
+Aplikácia beží ako bežný používateľ, nevyžaduje správcu a zapisuje logy do `logs/`.
+
+Postup:
+
+1. kliknite na `Vybrať priečinok makléra`,
+2. vyberte presne jeden vstupný priečinok,
+3. kliknite na `Načítať a skontrolovať`,
+4. upravte načítané údaje vo formulári,
+5. kliknite na `Generovať vizitku`,
+6. ak chcete publikovať, zaškrtnite `Po úspechu publikovať na GitHub Pages`.
+
+Automatický režim:
+
+```powershell
+.\tools\WFM-Card-Generator.ps1 -BrokerFolder "C:\cesta\Maklér" -Generate -Publish -Silent
+```
+
+Exit code `0` znamená PASS. Nenulový exit code znamená FAIL.
+
+## Vstupný priečinok nového makléra
+
+Používateľ vždy vyberá iba jeden konkrétny priečinok. Systém nikdy automaticky neimportuje všetky priečinky v koreňovom adresári.
+
+Priečinok musí obsahovať:
+
+- presne jeden `.vcf` súbor,
+- presne jednu fotografiu `.jpg`, `.jpeg` alebo `.png`.
+
+Voliteľne môže obsahovať `broker.json`, ktorý prepíše údaje načítané z VCF.
+
+Príklad:
+
+```text
+Kristián Vraniak/
+├── fotografia.png
+└── kontakt.vcf
+```
+
+Import cez CLI:
+
+```powershell
+npm run import-broker -- --folder "C:\cesta\Kristián Vraniak"
+```
+
+Import spracuje iba uvedený priečinok. Produkčný build potom vygeneruje všetkých už registrovaných aktívnych maklérov z `data/brokers/`.
+
+## Kanonické úložisko
+
+Po úspešnom importe sa údaje skopírujú do:
+
+- `data/brokers/<slug>.json`
+- `assets/brokers/<slug>/photo.jpg`
+- `data/status/<slug>.json`
+
+Zdrojový priečinok potom už nie je potrebný na ďalší build. Môžete ho ponechať, presunúť do archívu alebo odstrániť. Aplikácia ho nemaže automaticky.
 
 ## Inštalácia
 
@@ -98,7 +165,7 @@ GitHub Pages URL Jakuba:
 
 QR kód sa vždy generuje podľa aktuálneho buildu.
 
-## Pridanie ďalšieho makléra
+## Pridanie ďalšieho makléra bez aplikácie
 
 Minimálny postup:
 
@@ -153,6 +220,17 @@ Build ju prekopíruje do `dist/<slug>/photo.jpg`, použije v Open Graph a vlož�
 
 VCF sa generuje automaticky vo formáte vCard 3.0 s CRLF koncami riadkov a Base64 JPEG fotografiou.
 
+VCF obsahuje:
+
+- pracovný web,
+- WhatsApp URL,
+- Facebook URL,
+- Instagram URL,
+- `X-SOCIALPROFILE` polia,
+- Apple kompatibilné `itemN.URL` a `itemN.X-ABLabel` polia.
+
+Android, iPhone, Google Kontakty a Outlook môžu vlastné sociálne polia zobrazovať rozdielne. Preto zostávajú všetky sociálne odkazy aj ako tlačidlá na webovej vizitke.
+
 ## QR
 
 QR sa generuje automaticky do:
@@ -160,6 +238,17 @@ QR sa generuje automaticky do:
 `dist/<slug>/qr.png`
 
 Obsahuje finálnu produkčnú URL podľa `SITE_URL` a `BASE_PATH`.
+
+## Logo a pozadie
+
+Spoločný branding je v:
+
+- `assets/branding/logo.png`
+- `assets/branding/background.png`
+
+Build skončí FAIL, ak niektorý súbor chýba alebo nie je PNG. Logo sa zobrazuje v hornej časti vizitky a odkazuje na `https://www.wfmreality.sk/`. Pozadie sa kopíruje do `dist/assets/branding/background.png` a používa sa cez CSS s tmavou vrstvou kvôli čitateľnosti.
+
+Firemné farby a cesty k brandingu sa menia v `config/company.json`.
 
 ## Deaktivovanie makléra
 
@@ -189,10 +278,21 @@ Netlify: vrátiť predchádzajúci deploy v Netlify UI.
 
 GitHub Pages: revertovať commit na `main` a nechať workflow znova nasadiť predchádzajúci stav.
 
+Lokálny návrat na stav pred aplikáciou:
+
+```powershell
+git reset --hard backup-before-import-app-20260802
+```
+
+Použite iba vtedy, keď chcete zahodiť všetky neskoršie lokálne zmeny.
+
 ## Bežné chyby
 
 - `Fotografia neexistuje` - vložte `assets/brokers/<slug>/photo.jpg`.
 - `Telefón nie je E.164` - telefón musí byť napríklad `+421904882685`.
 - `Duplicitný slug` - každý maklér musí mať unikátny slug.
 - `QR sa nedá dekódovať` - zopakujte build a test.
+- `Branding súbor chýba` - doplňte `assets/branding/logo.png` alebo `assets/branding/background.png`.
+- `Priečinok musí obsahovať presne jeden VCF súbor` - odstráňte alebo presuňte duplicitný VCF zo vstupného priečinka.
+- `Priečinok musí obsahovať presne jednu fotografiu` - nechajte vo vstupnom priečinku iba jednu fotku.
 - GitHub token neplatný - spustite `gh auth login --hostname github.com --web --git-protocol https`.

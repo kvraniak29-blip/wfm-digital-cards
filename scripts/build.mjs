@@ -17,7 +17,7 @@ import {
   root,
   writeText
 } from "./lib.mjs";
-import { validateAll, validatePhotos } from "./validate-data.mjs";
+import { validateAll, validateBranding, validatePhotos } from "./validate-data.mjs";
 import { generateVcf } from "./generate-vcf.mjs";
 import { generateQr } from "./generate-qr.mjs";
 
@@ -30,7 +30,8 @@ const brokers = await loadBrokers();
 const activeBrokers = brokers.filter((broker) => broker.active);
 const validationErrors = [
   ...validateAll(company, brokers, { requirePhotos: false }),
-  ...(await validatePhotos(activeBrokers))
+  ...(await validatePhotos(activeBrokers)),
+  ...(await validateBranding(company))
 ];
 
 if (validationErrors.length) {
@@ -43,6 +44,9 @@ await fs.mkdir(path.join(distDir, "assets"), { recursive: true });
 await fs.copyFile(path.join(root, "src", "styles.css"), path.join(distDir, "assets", "styles.css"));
 await fs.copyFile(path.join(root, "src", "script.js"), path.join(distDir, "assets", "script.js"));
 await writeText(path.join(distDir, "assets", "favicon.svg"), faviconSvg(company));
+await fs.mkdir(path.join(distDir, "assets", "branding"), { recursive: true });
+await fs.copyFile(path.join(root, company.logo), path.join(distDir, "assets", "branding", "logo.png"));
+await fs.copyFile(path.join(root, company.background), path.join(distDir, "assets", "branding", "background.png"));
 
 const brokerTemplate = await fs.readFile(path.join(root, "src", "broker-template.html"), "utf8");
 const indexTemplate = await fs.readFile(path.join(root, "src", "index-template.html"), "utf8");
@@ -53,16 +57,17 @@ for (const broker of activeBrokers) {
   await fs.mkdir(outDir, { recursive: true });
   const photoOut = path.join(outDir, "photo.jpg");
   await ensureJpegPhoto(broker.photo, photoOut);
-  const vcf = await generateVcf(broker, photoOut);
-  await writeText(path.join(outDir, `${broker.slug}.vcf`), vcf);
   const url = brokerUrl(env, broker);
-  await generateQr(path.join(outDir, "qr.png"), url);
   const facebook = resolveSocial(broker, company, "facebook");
   const instagram = resolveSocial(broker, company, "instagram");
+  const whatsapp = broker.whatsapp || `https://wa.me/${broker.phoneE164.replace("+", "")}`;
+  const vcf = await generateVcf(broker, photoOut, { whatsapp, facebook, instagram });
+  await writeText(path.join(outDir, `${broker.slug}.vcf`), vcf);
+  await generateQr(path.join(outDir, "qr.png"), url);
   const buttons = [
     button("Uložiť kontakt", `./${broker.slug}.vcf`, iconDownload(), `Stiahnuť kontakt ${broker.displayName} vo formáte vCard`, true),
     button("Zavolať", `tel:${broker.phoneE164}`, iconPhone(), `Zavolať ${broker.displayName}`),
-    button("WhatsApp", broker.whatsapp || `https://wa.me/${broker.phoneE164.replace("+", "")}`, iconMessage(), `Napísať cez WhatsApp`),
+    button("WhatsApp", whatsapp, iconMessage(), `Napísať cez WhatsApp`),
     button("Napísať e-mail", `mailto:${broker.email}`, iconMail(), `Napísať e-mail ${broker.displayName}`),
     button("Web WFM Reality", broker.website, iconGlobe(), "Otvoriť web WFM Reality"),
     button("Facebook WFM Reality", facebook, iconFacebook(), "Otvoriť Facebook WFM Reality"),
@@ -78,8 +83,10 @@ for (const broker of activeBrokers) {
     ogImage: publicUrl(env, `${broker.slug}/photo.jpg`),
     assetPrefix: assetPrefix(env),
     companyName: company.name,
+    companyWebsite: company.website,
     displayName: broker.displayName,
     brokerTitle: broker.title,
+    photoPosition: broker.photoPosition || "50% 50%",
     phoneDisplay: broker.phoneDisplay,
     email: broker.email,
     website: broker.website,
@@ -95,6 +102,7 @@ const brokerList = activeBrokers.map((broker) => (
 
 await writeText(path.join(distDir, "index.html"), render(indexTemplate, {
   companyName: company.name,
+  companyWebsite: company.website,
   rootUrl: env.rootUrl,
   assetPrefix: assetPrefix(env),
   brokerList

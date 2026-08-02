@@ -23,15 +23,14 @@
   <main class="page">
     <article class="card" aria-labelledby="card-title">
       <header class="brand">
-        <div class="brand-mark" aria-label="{{companyName}}">
-          <span class="brand-symbol" aria-hidden="true">W</span>
-          <span>{{companyName}}</span>
-        </div>
+        <a class="brand-logo-link" href="{{companyWebsite}}" aria-label="Otvoriť web {{companyName}}">
+          <img class="brand-logo" src="{{assetPrefix}}/assets/branding/logo.png" alt="{{companyName}}" width="220" height="80">
+        </a>
         <span class="badge">NFC vizitka</span>
       </header>
       <section class="profile">
         <div class="photo-wrap">
-          <img class="photo" src="./photo.jpg" alt="Profilová fotografia: {{displayName}}" width="800" height="800">
+          <img class="photo" src="./photo.jpg" alt="Profilová fotografia: {{displayName}}" width="800" height="800" style="object-position: {{photoPosition}};">
         </div>
         <h1 id="card-title">{{displayName}}</h1>
         <p class="role">{{brokerTitle}}</p>

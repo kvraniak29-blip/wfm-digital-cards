@@ -3,11 +3,15 @@
   "website": "https://www.wfmreality.sk/",
   "facebook": "https://www.facebook.com/WFMReality/",
   "instagram": "https://www.instagram.com/wfmreality.sk/",
+  "logo": "assets/branding/logo.png",
+  "background": "assets/branding/background.png",
   "theme": {
-    "primary": "#0b253d",
-    "secondary": "#23a8a0",
-    "background": "#071d31",
+    "primary": "#0b4c55",
+    "secondary": "#e8b63f",
+    "accent": "#23a8a0",
+    "background": "#07343b",
     "surface": "#ffffff",
-    "text": "#ffffff"
+    "text": "#ffffff",
+    "textDark": "#152127"
   }
 }

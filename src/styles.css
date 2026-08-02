@@ -1,6 +1,7 @@
 :root {
   --primary: #0b253d;
-  --secondary: #23a8a0;
+  --secondary: #e8b63f;
+  --accent: #23a8a0;
   --background: #071d31;
   --surface: #ffffff;
   --text: #ffffff;
@@ -26,7 +27,8 @@ body {
   line-height: 1.5;
   letter-spacing: 0;
   background:
-    linear-gradient(160deg, rgba(35, 168, 160, 0.18), transparent 42%),
+    linear-gradient(180deg, rgba(7, 29, 49, 0.78), rgba(7, 29, 49, 0.9)),
+    var(--card-background, url("./branding/background.png")) center / cover fixed no-repeat,
     linear-gradient(180deg, #071d31 0%, #0b253d 58%, #061626 100%);
 }
 
@@ -65,30 +67,27 @@ a {
   margin-bottom: 1.45rem;
 }
 
-.brand-mark {
+.brand-logo-link {
   display: inline-flex;
   align-items: center;
-  gap: 0.65rem;
-  font-weight: 850;
-  text-transform: uppercase;
+  min-height: 3rem;
+  border-radius: 0.65rem;
+  text-decoration: none;
 }
 
-.brand-symbol {
-  width: 2.35rem;
-  height: 2.35rem;
-  display: grid;
-  place-items: center;
-  border-radius: 0.65rem;
-  color: #052238;
-  background: linear-gradient(135deg, var(--secondary), #98fff6);
-  font-weight: 900;
+.brand-logo {
+  width: min(11.5rem, 48vw);
+  height: auto;
+  display: block;
+  object-fit: contain;
+  filter: drop-shadow(0 8px 18px rgba(0, 0, 0, 0.26));
 }
 
 .badge {
   padding: 0.38rem 0.68rem;
-  border: 1px solid rgba(35, 168, 160, 0.48);
+  border: 1px solid rgba(232, 182, 63, 0.55);
   border-radius: 999px;
-  color: #c6fffb;
+  color: #ffe8a3;
   font-size: 0.78rem;
   white-space: nowrap;
 }
@@ -103,7 +102,7 @@ a {
   margin: 0 auto 1.05rem;
   padding: 0.32rem;
   border-radius: 50%;
-  background: linear-gradient(135deg, var(--secondary), rgba(255, 255, 255, 0.72));
+  background: linear-gradient(135deg, var(--accent), var(--secondary));
   box-shadow: 0 18px 42px rgba(0, 0, 0, 0.34);
 }
 
@@ -161,7 +160,7 @@ h1 {
 
 .button:hover {
   transform: translateY(-1px);
-  border-color: rgba(35, 168, 160, 0.68);
+  border-color: rgba(232, 182, 63, 0.7);
   background: rgba(255, 255, 255, 0.11);
 }
 
