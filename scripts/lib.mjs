@@ -106,12 +106,9 @@ export async function ensureJpegPhoto(source, dest) {
   await fs.access(input);
   const meta = await sharp(input).metadata();
   if (!meta.width || !meta.height) throw new Error(`Fotografia sa nedá načítať: ${source}`);
+  if (meta.format !== "jpeg") throw new Error(`Fotografia musí byť JPEG: ${source}`);
   await fs.mkdir(path.dirname(dest), { recursive: true });
-  await sharp(input)
-    .rotate()
-    .resize(900, 900, { fit: "cover", position: "centre" })
-    .jpeg({ quality: 90, mozjpeg: true })
-    .toFile(dest);
+  await fs.copyFile(input, dest);
   return { input, width: meta.width, height: meta.height };
 }
 
