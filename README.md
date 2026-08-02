@@ -24,20 +24,23 @@ Kontaktné údaje sa nemenia ručne v HTML, VCF ani QR. Zdrojom pravdy je JSON m
 
 Spustite:
 
-```powershell
-.\Spustit-WFM-Generator.cmd
+```cmd
+Spustit-WFM-Generator.cmd
 ```
 
-Aplikácia beží ako bežný používateľ, nevyžaduje správcu a zapisuje logy do `logs/`.
+Spúšťač je pripravený na dvojklik vo Windows. Nastaví kódovanie konzoly na UTF-8, spustí Windows PowerShell v režime `-STA` a zachová návratový kód skriptu. Samotný súbor `tools/WFM-Card-Generator.ps1` je uložený ako UTF-8 with BOM, aby Windows PowerShell 5.1 zobrazoval slovenské texty bez mojibake. Aplikácia beží ako bežný používateľ, nevyžaduje správcu a zapisuje logy do `logs/`.
 
 Postup:
 
 1. kliknite na `Vybrať priečinok makléra`,
 2. vyberte presne jeden vstupný priečinok,
-3. kliknite na `Načítať a skontrolovať`,
+3. aplikácia makléra automaticky načíta a zobrazí VCF, fotografiu, slug a verejnú URL,
 4. upravte načítané údaje vo formulári,
-5. kliknite na `Generovať vizitku`,
-6. ak chcete publikovať, zaškrtnite `Po úspechu publikovať na GitHub Pages`.
+5. kliknite na `Vygenerovať lokálne`,
+6. lokálny náhľad otvárajte cez `Otvoriť lokálny náhľad`,
+7. publikovanie spúšťajte samostatne cez `Vygenerovať a publikovať`.
+
+Tlačidlá generovania sú deaktivované, kým nie je načítaný platný priečinok, VCF, fotografia a povinné kontaktné údaje.
 
 Automatický režim:
 
@@ -46,6 +49,14 @@ Automatický režim:
 ```
 
 Exit code `0` znamená PASS. Nenulový exit code znamená FAIL.
+
+Podporované prostredie pre Windows generátor:
+
+- Windows PowerShell 5.1,
+- PowerShell 7,
+- Node.js a npm v `PATH`,
+- Git v `PATH`,
+- GitHub CLI iba pri publikovaní.
 
 ## Vstupný priečinok nového makléra
 
@@ -99,7 +110,22 @@ npm test
 npm run serve
 ```
 
-Lokálny server otvorí výstup z `dist/` na `http://127.0.0.1:4173/`.
+Lokálny náhľad nikdy neotvára súbory cez `file://`. Používa HTTP server:
+
+```powershell
+npm run build:github-pages
+npm run serve
+```
+
+Pre GitHub Pages build server číta `dist/manifest.json`, odstráni `basePath` a mapuje napríklad:
+
+`http://127.0.0.1:4173/wfm-digital-cards/jakub-svec/`
+
+na:
+
+`dist/jakub-svec/index.html`
+
+Port je predvolene `4173`. Ak je obsadený, ukončite predchádzajúci lokálny server alebo nastavte inú hodnotu cez premennú `PORT`. Windows aplikácia ukončuje iba server, ktorý sama spustila.
 
 ## Deployment premenné
 
@@ -149,7 +175,15 @@ Po pushi do `main` workflow:
 1. nainštaluje závislosti cez `npm ci`,
 2. spustí testy,
 3. spustí `npm run build:github-pages`,
-4. nasadí `dist/` cez GitHub Pages.
+4. spustí Windows PowerShell 5.1 smoke test generátora,
+5. nasadí `dist/` cez GitHub Pages.
+
+Ak publikovanie z Windows aplikácie zlyhá, skontrolujte:
+
+- posledný log v `logs/WFM-Generator-*.log`,
+- či nie sú v pracovnom strome cudzie necommitnuté zmeny,
+- či je GitHub CLI prihlásené (`gh auth status`),
+- či workflow GitHub Pages skončil úspechom.
 
 ## Prepnutie hostingu
 

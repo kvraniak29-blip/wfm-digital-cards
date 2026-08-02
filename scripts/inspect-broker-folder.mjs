@@ -52,8 +52,8 @@ export async function inspectBrokerFolder(folderArg) {
       whatsapp: overrides.whatsapp || parsed.whatsapp || (phoneE164 ? `https://wa.me/${phoneE164.replace("+", "")}` : ""),
       photoPosition: overrides.photoPosition || "50% 50%",
       social: {
-        facebook: overrides.social?.facebook ?? (parsed.facebook || null),
-        instagram: overrides.social?.instagram ?? (parsed.instagram || null)
+        facebook: overrides.social?.facebook ?? (parsed.facebook || company.facebook || null),
+        instagram: overrides.social?.instagram ?? (parsed.instagram || company.instagram || null)
       }
     }
   };
