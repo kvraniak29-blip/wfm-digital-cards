@@ -2,9 +2,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import sharp from "sharp";
 import { loadBrokers, loadCompany, root } from "./lib.mjs";
-import { fileURLToPath } from "node:url";
+import { pathToFileURL } from "node:url";
 
-const isMain = fileURLToPath(import.meta.url) === path.resolve(process.argv[1] || "");
+const isMain = process.argv[1] ? import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href : false;
 
 export function validateAll(company, brokers, options = {}) {
   const errors = [];

@@ -8,7 +8,6 @@ import { loadBrokers, loadCompany, readJson, root } from "../scripts/lib.mjs";
 import { validateAll, validatePhotos } from "../scripts/validate-data.mjs";
 
 const results = [];
-const npmBin = process.platform === "win32" ? "npm.cmd" : "npm";
 await test("validácia JSON a company.json", async () => {
   const company = await loadCompany();
   const brokers = await loadBrokers();
@@ -19,11 +18,11 @@ await test("validácia fotografií", async () => {
   assert.deepEqual(await validatePhotos(brokers), []);
 });
 await test("build pre Netlify", async () => {
-  execFileSync(npmBin, ["run", "build:netlify"], { cwd: root, stdio: "pipe" });
+  execFileSync(process.execPath, ["scripts/build.mjs", "--target", "netlify"], { cwd: root, stdio: "pipe" });
   await verifyBuild("netlify", "https://wfm-digital-cards.netlify.app/jakub-svec/");
 });
 await test("build pre GitHub Pages", async () => {
-  execFileSync(npmBin, ["run", "build:github-pages"], { cwd: root, stdio: "pipe" });
+  execFileSync(process.execPath, ["scripts/build.mjs", "--target", "github-pages"], { cwd: root, stdio: "pipe" });
   await verifyBuild("github-pages", "https://kvraniak29-blip.github.io/wfm-digital-cards/jakub-svec/");
 });
 
