@@ -42,6 +42,7 @@ await test("Windows PowerShell generátor je uložený ako UTF-8 BOM", async () 
   assert.ok(text.includes("System.Diagnostics.Process"));
   assert.ok(text.includes("System.Windows.Forms.Timer"));
   assert.ok(text.includes("ResultFile"));
+  assert.ok(text.includes("core.quotepath=false"));
 });
 
 await test("Windows PowerShell validácia nevracia null pri nulovom počte chýb", async () => {
@@ -207,6 +208,80 @@ await test("Windows PowerShell child proces vytvorí ResultFile FAIL pri neplatn
   await assertLatestGeneratorLogClean();
 });
 
+await test("lokálny priečinok Makléri je ignorovaný Gitom", async () => {
+  const folder = path.join(root, "Makléri", "WFM Test Broker");
+  await fs.mkdir(folder, { recursive: true });
+  const files = [
+    path.join(folder, "kontakt.vcf"),
+    path.join(folder, "fotografia.jpg"),
+    path.join(folder, "broker.json")
+  ];
+  try {
+    await fs.writeFile(files[0], sampleVcf(testBrokerOverrides()), "utf8");
+    await sharp({ create: { width: 20, height: 20, channels: 3, background: "#ffffff" } }).jpeg().toFile(files[1]);
+    await fs.writeFile(files[2], `${JSON.stringify(testBrokerOverrides(), null, 2)}\n`, "utf8");
+    for (const file of files) {
+      const ignored = execFileSync("git", ["check-ignore", "-v", file], { cwd: root, encoding: "utf8" });
+      assert.match(ignored, /\/Makléri\//);
+    }
+    const status = gitStatus(["--untracked-files=all", "--", "Makléri"]);
+    assert.ok(!status.includes("Makléri/"));
+    assert.ok(!status.includes("Makl\\303\\251ri/"));
+    assert.ok(!status.includes("kontakt.vcf"));
+    assert.ok(!status.includes("fotografia.jpg"));
+    assert.ok(!status.includes("broker.json"));
+  } finally {
+    await fs.rm(folder, { recursive: true, force: true });
+  }
+});
+
+await test("Git status s diakritikou zostáva čitateľný", async () => {
+  const file = path.join(root, `Žluťoučký-status-${Date.now()}.tmp`);
+  try {
+    await fs.writeFile(file, "unicode status\n", "utf8");
+    const status = gitStatus(["--untracked-files=all", "--", file]);
+    assert.ok(status.includes("Žluťoučký-status-"));
+    assert.ok(!status.includes("\\303"));
+  } finally {
+    await fs.rm(file, { force: true });
+  }
+});
+
+await test("publikovanie s cudzím koreňovým súborom skončí ResultFile FAIL bez published", async () => {
+  if (process.platform !== "win32") return;
+  await cleanupTestBroker(testSlug);
+  const folder = await makeFixtureFolder("Windows Publish Foreign", "jpg", testBrokerOverrides());
+  const resultFile = path.join(workRoot, `result-publish-foreign-${Date.now()}.json`);
+  const foreignFile = path.join(root, `wfm-foreign-${Date.now()}.tmp`);
+  try {
+    await fs.writeFile(foreignFile, "foreign\n", "utf8");
+    const child = spawnSync("powershell.exe", [
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-File",
+      "tools/WFM-Card-Generator.ps1",
+      "-BrokerFolder",
+      folder,
+      "-ResultFile",
+      resultFile,
+      "-Generate",
+      "-Publish",
+      "-Silent",
+      "-SkipImportTests"
+    ], { cwd: root, encoding: "utf8" });
+    assert.equal(child.status, 1);
+    const result = JSON.parse(await fs.readFile(resultFile, "utf8"));
+    assert.equal(result.status, "FAIL");
+    assert.equal(result.published, false);
+    assert.match(result.message, /Publikovanie zastavené|Publikovanie je povolené iba na vetve main/);
+    await assertLatestGeneratorLogClean();
+  } finally {
+    await fs.rm(foreignFile, { force: true });
+    await cleanupTestBroker(testSlug);
+  }
+});
+
 await test("publikovanie je na ne-main vetve blokované cez ResultFile FAIL", async () => {
   if (process.platform !== "win32") return;
   const branch = currentGitBranch();
@@ -232,7 +307,7 @@ await test("publikovanie je na ne-main vetve blokované cez ResultFile FAIL", as
   assert.equal(child.status, 1);
   const result = JSON.parse(await fs.readFile(resultFile, "utf8"));
   assert.equal(result.status, "FAIL");
-  assert.equal(result.published, true);
+  assert.equal(result.published, false);
   assert.match(result.message, /Publikovanie je povolené iba na vetve main/);
   await assertLatestGeneratorLogClean();
 });
@@ -347,7 +422,7 @@ await test("lokálny HTTP server podporuje GitHub Pages basePath", async () => {
   }
 });
 
-await test("chránené dáta Jakuba a existujúceho Kristiána zostali nezmenené", async () => {
+await test("chránené dáta produkčných maklérov zostali nezmenené", async () => {
   await assertProtectedBrokerFilesUnchanged(protectedBefore);
 });
 
@@ -440,6 +515,10 @@ function currentGitBranch() {
   }
 }
 
+function gitStatus(extraArgs = []) {
+  return execFileSync("git", ["-c", "core.quotepath=false", "status", "--porcelain", ...extraArgs], { cwd: root, encoding: "utf8" });
+}
+
 function sampleVcf(overrides = {}) {
   const firstName = overrides.firstName ?? "Kristián";
   const lastName = overrides.lastName ?? "Vraniak";
@@ -475,7 +554,7 @@ async function runImport(folder) {
 }
 
 async function cleanupTestBroker(slug) {
-  const protectedSlugs = new Set(["jakub-svec", realKristianSlug]);
+  const protectedSlugs = new Set(["jakub-svec", realKristianSlug, "stanislav-penxa"]);
   if (protectedSlugs.has(slug) || !slug.startsWith("wfm-test-")) {
     throw new Error(`Odmietnuté čistenie netestovacieho slugu: ${slug}`);
   }
@@ -489,7 +568,9 @@ async function captureProtectedBrokerFiles() {
     protectedFile("jakub-svec", "data/brokers/jakub-svec.json"),
     protectedFile("jakub-svec", "assets/brokers/jakub-svec/photo.jpg"),
     protectedFile(realKristianSlug, `data/brokers/${realKristianSlug}.json`),
-    protectedFile(realKristianSlug, `assets/brokers/${realKristianSlug}/photo.jpg`)
+    protectedFile(realKristianSlug, `assets/brokers/${realKristianSlug}/photo.jpg`),
+    protectedFile("stanislav-penxa", "data/brokers/stanislav-penxa.json"),
+    protectedFile("stanislav-penxa", "assets/brokers/stanislav-penxa/photo.jpg")
   ];
   const snapshot = [];
   for (const item of files) {

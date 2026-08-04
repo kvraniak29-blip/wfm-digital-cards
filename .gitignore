@@ -4,6 +4,8 @@ outputs/
 logs/
 .netlify/
 dist/
+/Makléri/
+/Makleri/
 .env
 .env.*
 !.env.example

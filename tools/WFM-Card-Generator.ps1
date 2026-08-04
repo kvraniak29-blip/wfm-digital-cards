@@ -313,7 +313,11 @@ function Invoke-GenerateCore {
             $script:LastOverrideFile = $null
         }
 
-        if ($DoPublish) { Invoke-Publish }
+        if ($DoPublish) {
+            Invoke-Publish
+            return $true
+        }
+        return $false
     } catch {
         if ($script:LastOverrideFile) { Write-Log "Dočasný override ponechaný pre diagnostiku: $script:LastOverrideFile" }
         throw
@@ -321,7 +325,7 @@ function Invoke-GenerateCore {
 }
 
 function Get-GitPorcelain {
-    $out = Invoke-ProjectCommand 'git.exe' @('status', '--porcelain')
+    $out = Invoke-ProjectCommand 'git.exe' @('-c', 'core.quotepath=false', 'status', '--porcelain')
     if (-not $out) { return @() }
     return @($out -split "`r?`n" | Where-Object { $_.Trim() })
 }
@@ -1024,9 +1028,9 @@ try {
     }
     if ($Generate) {
         if (-not $BrokerFolder) { throw "-BrokerFolder je povinný v automatickom režime." }
-        Invoke-GenerateCore -Folder $BrokerFolder -Broker $null -DoPublish ([bool]$Publish) -PreparedOverrideFile $OverrideFile -SkipImportTests ([bool]$SkipImportTests)
+        $published = Invoke-GenerateCore -Folder $BrokerFolder -Broker $null -DoPublish ([bool]$Publish) -PreparedOverrideFile $OverrideFile -SkipImportTests ([bool]$SkipImportTests)
         if ($ResultFile) {
-            Write-ResultFile -Path $ResultFile -Status 'PASS' -Slug (Get-ResultSlug $BrokerFolder $OverrideFile) -Published ([bool]$Publish) -Message $(if ($Publish) { 'Vizitka bola vygenerovaná a publikovaná.' } else { 'Lokálne generovanie bolo dokončené.' })
+            Write-ResultFile -Path $ResultFile -Status 'PASS' -Slug (Get-ResultSlug $BrokerFolder $OverrideFile) -Published ([bool]$published) -Message $(if ($published) { 'Vizitka bola vygenerovaná a publikovaná.' } else { 'Lokálne generovanie bolo dokončené.' })
         }
         Write-Log 'PASS'
         if (-not $Silent) { Write-Host "PASS. Log: $LogFile" }
@@ -1038,7 +1042,7 @@ try {
     Write-Log ("FAIL " + $_.Exception.Message)
     if ($ResultFile) {
         try {
-            Write-ResultFile -Path $ResultFile -Status 'FAIL' -Slug (Get-ResultSlug $BrokerFolder $OverrideFile) -Published ([bool]$Publish) -Message $_.Exception.Message
+            Write-ResultFile -Path $ResultFile -Status 'FAIL' -Slug (Get-ResultSlug $BrokerFolder $OverrideFile) -Published $false -Message $_.Exception.Message
         } catch {
             Write-Log ("FAIL ResultFile zápis zlyhal: " + $_.Exception.Message)
         }

@@ -1,0 +1,20 @@
+{
+  "active": true,
+  "slug": "stanislav-penxa",
+  "firstName": "Stanislav",
+  "lastName": "Penxa",
+  "displayName": "Stanislav Penxa",
+  "title": "Realitný maklér",
+  "company": "WFM Reality",
+  "phoneDisplay": "+421 911 399 034",
+  "phoneE164": "+421911399034",
+  "email": "stanislav.penxa@wfmreality.sk",
+  "website": "https://www.wfmreality.sk/",
+  "whatsapp": "https://wa.me/421911399034",
+  "photo": "assets/brokers/stanislav-penxa/photo.jpg",
+  "photoPosition": "50% 42%",
+  "social": {
+    "facebook": "https://www.facebook.com/WFMReality/",
+    "instagram": "https://www.instagram.com/wfmreality.sk/"
+  }
+}
