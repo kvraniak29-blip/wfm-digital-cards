@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
+import { connect, createServer } from "node:net";
 import path from "node:path";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import sharp from "sharp";
@@ -13,11 +14,13 @@ import { parseVCard } from "../scripts/vcard-parser.mjs";
 const results = [];
 const realKristianSlug = "kristian-vraniak";
 const testSlug = "wfm-test-broker";
+const photoCropTestSlug = "wfm-test-photo-crop";
 const testDisplayName = "WFM Test Broker";
 const workRoot = path.join(root, "work", "tests");
 const protectedBefore = await captureProtectedBrokerFiles();
 
 await cleanupTestBroker(testSlug);
+await cleanupTestBroker(photoCropTestSlug);
 
 await test("validácia JSON, company.json a branding", async () => {
   const company = await loadCompany();
@@ -43,6 +46,8 @@ await test("Windows PowerShell generátor je uložený ako UTF-8 BOM", async () 
   assert.ok(text.includes("System.Windows.Forms.Timer"));
   assert.ok(text.includes("ResultFile"));
   assert.ok(text.includes("core.quotepath=false"));
+  assert.ok(text.includes("GuiPhotoPositionSelfTest"));
+  assert.ok(text.includes("Paint-CircularPhotoPreview"));
 });
 
 await test("Windows PowerShell validácia nevracia null pri nulovom počte chýb", async () => {
@@ -143,6 +148,36 @@ await test("Windows PowerShell GUI self-test klikne lokálne generovanie a skon�
   await assertLatestGeneratorLogClean();
 });
 
+await test("Windows PowerShell GUI self-test uloží photoPosition a reload ho zachová", async () => {
+  if (process.platform !== "win32") return;
+  await cleanupTestBroker(photoCropTestSlug);
+  const folder = await makeFixtureFolder("Windows Photo Position", "jpg", {
+    ...testBrokerOverrides({ slug: photoCropTestSlug, displayName: "WFM Test Photo Crop" }),
+    photoPosition: "50% 50%"
+  });
+  const output = execFileSync("powershell.exe", [
+    "-NoProfile",
+    "-STA",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-File",
+    "tools/WFM-Card-Generator.ps1",
+    "-BrokerFolder",
+    folder,
+    "-GuiPhotoPositionSelfTest",
+    "-Silent"
+  ], { cwd: root, encoding: "utf8" });
+  assert.ok(output.includes("PASS") || output.length === 0);
+  const sourceBroker = JSON.parse(await fs.readFile(path.join(folder, "broker.json"), "utf8"));
+  assert.equal(sourceBroker.photoPosition, "50% 38%");
+  const broker = JSON.parse(await fs.readFile(path.join(root, "data", "brokers", `${photoCropTestSlug}.json`), "utf8"));
+  assert.equal(broker.photoPosition, "50% 38%");
+  const html = await fs.readFile(path.join(root, "dist", photoCropTestSlug, "index.html"), "utf8");
+  assert.ok(html.includes("object-position: 50% 38%;"));
+  assert.ok(html.includes("class=\"photo\""));
+  await assertLatestGeneratorLogClean();
+});
+
 await test("Windows PowerShell child proces vytvorí ResultFile PASS a výstupy", async () => {
   if (process.platform !== "win32") return;
   await cleanupTestBroker(testSlug);
@@ -204,6 +239,8 @@ await test("Windows PowerShell child proces vytvorí ResultFile FAIL pri neplatn
   const result = JSON.parse(await fs.readFile(resultFile, "utf8"));
   assert.equal(result.status, "FAIL");
   assert.match(result.message, /Priečinok makléra neexistuje/);
+  assert.match(result.detail, /Priečinok makléra neexistuje/);
+  assert.ok(result.logFile.endsWith(".log"));
   assert.notEqual(result.message, "PASS");
   await assertLatestGeneratorLogClean();
 });
@@ -315,7 +352,9 @@ await test("publikovanie je na ne-main vetve blokované cez ResultFile FAIL", as
 await test("cleanup testov odmieta reálne maklérske slugy", async () => {
   await assert.rejects(() => cleanupTestBroker(realKristianSlug), /Odmietnuté čistenie netestovacieho slugu/);
   await assert.rejects(() => cleanupTestBroker("jakub-svec"), /Odmietnuté čistenie netestovacieho slugu/);
+  await assert.rejects(() => cleanupTestBroker("marek-vaclav"), /Odmietnuté čistenie netestovacieho slugu/);
   await cleanupTestBroker(testSlug);
+  await cleanupTestBroker(photoCropTestSlug);
 });
 
 await test("validácia fotografií", async () => {
@@ -395,11 +434,12 @@ await test("build pre Netlify", async () => {
 await test("build pre GitHub Pages a zachovanie Jakubovej URL", async () => {
   execFileSync(process.execPath, ["scripts/build.mjs", "--target", "github-pages"], { cwd: root, stdio: "pipe" });
   await verifyBuild("github-pages", "https://kvraniak29-blip.github.io/wfm-digital-cards/jakub-svec/");
+  await assertActiveBrokerPhotoPositionsMatchHtml();
 });
 
 await test("lokálny HTTP server podporuje GitHub Pages basePath", async () => {
   execFileSync(process.execPath, ["scripts/build.mjs", "--target", "github-pages"], { cwd: root, stdio: "pipe" });
-  const previewPort = 4187;
+  const previewPort = await getFreePort();
   const previewRoot = `http://127.0.0.1:${previewPort}`;
   const child = spawn(process.execPath, ["scripts/serve.mjs"], { cwd: root, env: { ...process.env, PORT: String(previewPort) }, stdio: "pipe" });
   try {
@@ -414,8 +454,8 @@ await test("lokálny HTTP server podporuje GitHub Pages basePath", async () => {
       const response = await fetch(url);
       assert.equal(response.status, 200, url);
     }
-    const missing = await fetch(`${previewRoot}/wfm-digital-cards/%2e%2e/package.json`);
-    assert.notEqual(missing.status, 200);
+    const missingStatus = await rawHttpStatus(previewPort, "/wfm-digital-cards/%2e%2e/package.json");
+    assert.notEqual(missingStatus, 200);
   } finally {
     child.kill();
     await new Promise((resolve) => child.once("exit", resolve));
@@ -427,6 +467,7 @@ await test("chránené dáta produkčných maklérov zostali nezmenené", async 
 });
 
 await cleanupTestBroker(testSlug);
+await cleanupTestBroker(photoCropTestSlug);
 
 for (const item of results) console.log(`${item.ok ? "PASS" : "FAIL"} ${item.name}${item.note ? ` - ${item.note}` : ""}`);
 if (results.some((item) => !item.ok)) process.exit(1);
@@ -493,7 +534,7 @@ async function makeFixtureFolder(name, imageType, overrides = {}) {
   return folder;
 }
 
-function testBrokerOverrides() {
+function testBrokerOverrides(overrides = {}) {
   return {
     slug: testSlug,
     firstName: "WFM",
@@ -503,7 +544,8 @@ function testBrokerOverrides() {
     phoneDisplay: "+421 900 111 222",
     phoneE164: "+421900111222",
     email: "wfm.test.broker@example.com",
-    whatsapp: "https://wa.me/421900111222"
+    whatsapp: "https://wa.me/421900111222",
+    ...overrides
   };
 }
 
@@ -554,7 +596,7 @@ async function runImport(folder) {
 }
 
 async function cleanupTestBroker(slug) {
-  const protectedSlugs = new Set(["jakub-svec", realKristianSlug, "stanislav-penxa"]);
+  const protectedSlugs = new Set(["jakub-svec", realKristianSlug, "marek-vaclav", "stanislav-penxa"]);
   if (protectedSlugs.has(slug) || !slug.startsWith("wfm-test-")) {
     throw new Error(`Odmietnuté čistenie netestovacieho slugu: ${slug}`);
   }
@@ -569,6 +611,8 @@ async function captureProtectedBrokerFiles() {
     protectedFile("jakub-svec", "assets/brokers/jakub-svec/photo.jpg"),
     protectedFile(realKristianSlug, `data/brokers/${realKristianSlug}.json`),
     protectedFile(realKristianSlug, `assets/brokers/${realKristianSlug}/photo.jpg`),
+    protectedFile("marek-vaclav", "data/brokers/marek-vaclav.json"),
+    protectedFile("marek-vaclav", "assets/brokers/marek-vaclav/photo.jpg"),
     protectedFile("stanislav-penxa", "data/brokers/stanislav-penxa.json"),
     protectedFile("stanislav-penxa", "assets/brokers/stanislav-penxa/photo.jpg")
   ];
@@ -636,4 +680,62 @@ async function waitForHttp(url) {
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
   throw lastError || new Error(`Server neodpovedá: ${url}`);
+}
+
+async function assertActiveBrokerPhotoPositionsMatchHtml() {
+  const brokers = (await loadBrokers()).filter((broker) => broker.active !== false);
+  for (const broker of brokers) {
+    const position = broker.photoPosition || "50% 50%";
+    assertValidPhotoPosition(position, broker.slug);
+    const html = await fs.readFile(path.join(root, "dist", broker.slug, "index.html"), "utf8");
+    assert.ok(
+      html.includes(`object-position: ${position};`),
+      `${broker.slug}: HTML nepoužíva photoPosition z broker JSON (${position})`
+    );
+  }
+}
+
+function assertValidPhotoPosition(position, slug) {
+  const match = String(position).match(/^(\d{1,3})%\s+(\d{1,3})%$/);
+  assert.ok(match, `${slug}: neplatný formát photoPosition: ${position}`);
+  const x = Number(match[1]);
+  const y = Number(match[2]);
+  assert.ok(x >= 0 && x <= 100, `${slug}: photoPosition X mimo rozsah 0-100: ${x}`);
+  assert.ok(y >= 0 && y <= 100, `${slug}: photoPosition Y mimo rozsah 0-100: ${y}`);
+}
+
+async function rawHttpStatus(port, target) {
+  return await new Promise((resolve, reject) => {
+    const socket = connect(port, "127.0.0.1");
+    let data = "";
+    socket.setTimeout(5000);
+    socket.on("connect", () => socket.write(`GET ${target} HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nConnection: close\r\n\r\n`));
+    socket.on("data", (chunk) => { data += chunk.toString("utf8"); });
+    socket.on("end", () => {
+      const match = data.match(/^HTTP\/1\.[01]\s+(\d+)/);
+      if (!match) reject(new Error(`Neplatná HTTP odpoveď pre ${target}`));
+      else resolve(Number(match[1]));
+    });
+    socket.on("timeout", () => {
+      socket.destroy();
+      reject(new Error(`Timeout HTTP odpovede pre ${target}`));
+    });
+    socket.on("error", reject);
+  });
+}
+
+async function getFreePort() {
+  return await new Promise((resolve, reject) => {
+    const server = connectProbeServer();
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      const port = address.port;
+      server.close(() => resolve(port));
+    });
+    server.on("error", reject);
+  });
+}
+
+function connectProbeServer() {
+  return createServer();
 }

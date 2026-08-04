@@ -9,6 +9,7 @@ param(
     [switch]$BrokerLoadSelfTest,
     [switch]$GuiLoadSelfTest,
     [switch]$GuiGenerateSelfTest,
+    [switch]$GuiPhotoPositionSelfTest,
     [string]$OverrideFile,
     [string]$ResultFile,
     [switch]$SkipImportTests
@@ -57,7 +58,8 @@ function Write-ResultFile {
         [Parameter(Mandatory)][string]$Status,
         [string]$Slug,
         [bool]$Published = $false,
-        [Parameter(Mandatory)][string]$Message
+        [Parameter(Mandatory)][string]$Message,
+        [string]$Detail = ''
     )
 
     $result = [ordered]@{
@@ -65,11 +67,48 @@ function Write-ResultFile {
         slug = $Slug
         published = $Published
         message = $Message
+        detail = $Detail
         logFile = $LogFile
     }
     $json = ($result | ConvertTo-Json -Depth 5)
     $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
     [System.IO.File]::WriteAllText($Path, $json, $utf8NoBom)
+}
+
+function Get-FailureSummary {
+    param([string]$Message)
+
+    $text = [string]$Message
+    $lines = @($text -split "\r?\n" | Where-Object { $_ -and $_.Trim() })
+    $failLine = $lines | Where-Object { $_ -match '^FAIL\s+' } | Select-Object -First 1
+    if ($failLine) { return $failLine.Trim() }
+
+    $assertLine = $lines | Where-Object { $_ -match 'AssertionError|Expected values|actual|expected|ERR_ASSERTION|notEqual|strictEqual' } | Select-Object -First 1
+    if ($assertLine) { return $assertLine.Trim() }
+
+    $commandLine = $lines | Where-Object { $_ -match 'Príkaz zlyhal|Command failed' } | Select-Object -First 1
+    if ($commandLine) { return $commandLine.Trim() }
+
+    if ($lines.Count -gt 0) { return $lines[0].Trim() }
+    return 'Neznáma chyba child procesu.'
+}
+
+function Limit-Text {
+    param(
+        [string]$Text,
+        [int]$MaxLength = 420
+    )
+    $value = ([string]$Text).Trim()
+    if ($value.Length -le $MaxLength) { return $value }
+    return $value.Substring(0, $MaxLength - 3) + '...'
+}
+
+function Format-ResultFailureForGui {
+    param($Result)
+
+    $message = Limit-Text ([string]$Result.message) 260
+    $log = if ($Result.logFile) { [string]$Result.logFile } else { $LogFile }
+    return "FAIL $message`nLog: $log"
 }
 
 function Get-ResultSlug {
@@ -200,8 +239,42 @@ function Write-BrokerOverride {
     $safe = ($Broker.slug -replace '[^a-zA-Z0-9-]', '-')
     if (-not $safe) { $safe = 'broker' }
     $file = Join-Path $LogsDir ("broker-override-{0}-{1}.json" -f $safe, (Get-Date -Format 'yyyyMMdd-HHmmss'))
-    ($override | ConvertTo-Json -Depth 8) | Set-Content -LiteralPath $file -Encoding UTF8
+    $json = ($override | ConvertTo-Json -Depth 8) + [Environment]::NewLine
+    [System.IO.File]::WriteAllText($file, $json, [System.Text.UTF8Encoding]::new($false))
     Write-Log "Zapísaný dočasný broker override: $file"
+    return $file
+}
+
+function Write-SourceBrokerJson {
+    param(
+        [Parameter(Mandatory)][string]$Folder,
+        [Parameter(Mandatory)]$Broker
+    )
+
+    if (-not (Test-Path -LiteralPath $Folder -PathType Container)) { throw "Priečinok makléra neexistuje: $Folder" }
+    $file = Join-Path $Folder 'broker.json'
+    $source = [ordered]@{
+        active = $true
+        slug = $Broker.slug
+        firstName = $Broker.firstName
+        lastName = $Broker.lastName
+        displayName = $Broker.displayName
+        title = $Broker.title
+        company = $Broker.company
+        phoneDisplay = $Broker.phoneDisplay
+        phoneE164 = $Broker.phoneE164
+        email = $Broker.email
+        website = $Broker.website
+        whatsapp = $Broker.whatsapp
+        photoPosition = $Broker.photoPosition
+        social = [ordered]@{
+            facebook = $Broker.facebook
+            instagram = $Broker.instagram
+        }
+    }
+    $json = ($source | ConvertTo-Json -Depth 8) + [Environment]::NewLine
+    [System.IO.File]::WriteAllText($file, $json, [System.Text.UTF8Encoding]::new($false))
+    Write-Log "Uložený zdrojový broker.json: $file"
     return $file
 }
 
@@ -498,14 +571,19 @@ function Start-Gui {
     $stateLabel.AutoSize = $false
     $stateGroup.Controls.Add($stateLabel)
 
-    $photoGroup = Add-Group $left 'Fotografia' 260
+    $photoGroup = Add-Group $left 'Fotografia' 300
     $picture = New-Object System.Windows.Forms.PictureBox
     $picture.Width = 210; $picture.Height = 210; $picture.Left = 18; $picture.Top = 28
     $picture.SizeMode = 'Zoom'
     $picture.BorderStyle = 'FixedSingle'
     $photoGroup.Controls.Add($picture)
+    $photoPreview = New-Object System.Windows.Forms.Panel
+    $photoPreview.Left = 245; $photoPreview.Top = 30; $photoPreview.Width = 124; $photoPreview.Height = 124
+    $photoPreview.BackColor = [System.Drawing.Color]::FromArgb(8, 35, 59)
+    $toolTip.SetToolTip($photoPreview, 'Živý kruhový náhľad výrezu použitého na webovej vizitke.')
+    $photoGroup.Controls.Add($photoPreview)
     $photoInfo = New-Object System.Windows.Forms.Label
-    $photoInfo.Left = 245; $photoInfo.Top = 30; $photoInfo.Width = 270; $photoInfo.Height = 180
+    $photoInfo.Left = 385; $photoInfo.Top = 30; $photoInfo.Width = 180; $photoInfo.Height = 220
     $photoGroup.Controls.Add($photoInfo)
 
     $urlGroup = Add-Group $left 'URL a výstup' 170
@@ -570,7 +648,7 @@ function Start-Gui {
         $fields[$meta[0]] = $box
     }
 
-    $settingsGroup = Add-Group $right 'Nastavenie fotografie' 118
+    $settingsGroup = Add-Group $right 'Nastavenie fotografie' 220
     foreach ($meta in @(
         @('slug', 'URL identifikátor *', 'Časť adresy bez diakritiky, napríklad jakub-svec.'),
         @('photoPosition', 'Pozícia fotografie *', 'CSS pozícia výrezu, napríklad 50% 50%.')
@@ -585,6 +663,24 @@ function Start-Gui {
         $toolTip.SetToolTip($box, $meta[2])
         $fields[$meta[0]] = $box
     }
+
+    $photoXLabel = New-Object System.Windows.Forms.Label
+    $photoXLabel.Text = 'Horizontálne: 50%'
+    $photoXLabel.Left = 14; $photoXLabel.Top = 100; $photoXLabel.Width = 165
+    $settingsGroup.Controls.Add($photoXLabel)
+    $photoXTrack = New-Object System.Windows.Forms.TrackBar
+    $photoXTrack.Left = 185; $photoXTrack.Top = 92; $photoXTrack.Width = 485; $photoXTrack.Minimum = 0; $photoXTrack.Maximum = 100; $photoXTrack.TickFrequency = 10; $photoXTrack.Value = 50
+    $toolTip.SetToolTip($photoXTrack, 'Posun výrezu fotografie doľava alebo doprava.')
+    $settingsGroup.Controls.Add($photoXTrack)
+
+    $photoYLabel = New-Object System.Windows.Forms.Label
+    $photoYLabel.Text = 'Vertikálne: 50%'
+    $photoYLabel.Left = 14; $photoYLabel.Top = 155; $photoYLabel.Width = 165
+    $settingsGroup.Controls.Add($photoYLabel)
+    $photoYTrack = New-Object System.Windows.Forms.TrackBar
+    $photoYTrack.Left = 185; $photoYTrack.Top = 147; $photoYTrack.Width = 485; $photoYTrack.Minimum = 0; $photoYTrack.Maximum = 100; $photoYTrack.TickFrequency = 10; $photoYTrack.Value = 50
+    $toolTip.SetToolTip($photoYTrack, 'Posun výrezu fotografie hore alebo dole.')
+    $settingsGroup.Controls.Add($photoYTrack)
 
     $publishGroup = Add-Group $right 'Publikovanie' 170
     $generateLocal = New-Object System.Windows.Forms.Button
@@ -612,6 +708,67 @@ function Start-Gui {
     $status.Left = 14; $status.Top = 105; $status.Width = 675; $status.Height = 50
     $status.Text = "Pripravené. Log: $LogFile"
     $publishGroup.Controls.Add($status)
+
+    function Convert-PhotoPositionToPercent {
+        param([string]$Value)
+        $x = 50
+        $y = 50
+        $parts = @(([string]$Value).Trim() -split '\s+' | Where-Object { $_ })
+        if ($parts.Count -ge 1 -and $parts[0] -match '^([0-9]{1,3})%$') { $x = [Math]::Min(100, [Math]::Max(0, [int]$Matches[1])) }
+        if ($parts.Count -ge 2 -and $parts[1] -match '^([0-9]{1,3})%$') { $y = [Math]::Min(100, [Math]::Max(0, [int]$Matches[1])) }
+        return [pscustomobject]@{ X = $x; Y = $y }
+    }
+
+    function Set-PhotoPositionControls {
+        param([string]$Value)
+        $position = Convert-PhotoPositionToPercent $Value
+        $photoXTrack.Value = $position.X
+        $photoYTrack.Value = $position.Y
+        $photoXLabel.Text = "Horizontálne: $($position.X)%"
+        $photoYLabel.Text = "Vertikálne: $($position.Y)%"
+        $photoPreview.Invalidate()
+    }
+
+    function Update-PhotoPositionFromSliders {
+        $fields['photoPosition'].Text = "$($photoXTrack.Value)% $($photoYTrack.Value)%"
+        Set-PhotoPositionControls $fields['photoPosition'].Text
+    }
+
+    function Paint-CircularPhotoPreview {
+        param($Sender, $EventArgs)
+        $graphics = $EventArgs.Graphics
+        $graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+        $graphics.Clear($photoPreview.BackColor)
+        $image = $picture.Image
+        if (-not $image) { return }
+
+        $diameter = [Math]::Min($Sender.ClientSize.Width, $Sender.ClientSize.Height) - 4
+        if ($diameter -le 0) { return }
+        $target = New-Object System.Drawing.Rectangle 2, 2, $diameter, $diameter
+        $path = [System.Drawing.Drawing2D.GraphicsPath]::new()
+        $path.AddEllipse($target)
+        $oldClip = $graphics.Clip
+        $graphics.SetClip($path)
+
+        $scale = [Math]::Max($diameter / $image.Width, $diameter / $image.Height)
+        $drawWidth = $image.Width * $scale
+        $drawHeight = $image.Height * $scale
+        $position = Convert-PhotoPositionToPercent $fields['photoPosition'].Text
+        $offsetX = $target.Left + (($diameter - $drawWidth) * ($position.X / 100.0))
+        $offsetY = $target.Top + (($diameter - $drawHeight) * ($position.Y / 100.0))
+        $destination = [System.Drawing.RectangleF]::new([single]$offsetX, [single]$offsetY, [single]$drawWidth, [single]$drawHeight)
+        $graphics.DrawImage($image, $destination)
+        $graphics.Clip = $oldClip
+        $path.Dispose()
+
+        $pen = [System.Drawing.Pen]::new([System.Drawing.Color]::FromArgb(53, 214, 199), 3)
+        $graphics.DrawEllipse($pen, $target)
+        $pen.Dispose()
+    }
+
+    $photoPreview.Add_Paint({ param($sender, $eventArgs) Paint-CircularPhotoPreview $sender $eventArgs })
+    $photoXTrack.Add_Scroll({ Update-PhotoPositionFromSliders })
+    $photoYTrack.Add_Scroll({ Update-PhotoPositionFromSliders })
 
     function Set-UiBusy {
         param([bool]$Busy)
@@ -642,7 +799,11 @@ function Start-Gui {
 
     foreach ($box in $fields.Values) {
         $box.Add_TextChanged({
+            param($sender, $eventArgs)
             if (-not $script:IsLoadingBroker) {
+                if ($sender -eq $fields['photoPosition']) {
+                    Set-PhotoPositionControls $fields['photoPosition'].Text
+                }
                 Update-Validation
             }
         })
@@ -670,6 +831,7 @@ function Start-Gui {
             $fields['instagram'].Text = [string]$info.broker.social.instagram
             $fields['slug'].Text = [string]$info.broker.slug
             $fields['photoPosition'].Text = [string]$info.broker.photoPosition
+            Set-PhotoPositionControls $fields['photoPosition'].Text
 
             $image = Get-ImageCopy $info.photo
             if ($picture.Image) {
@@ -677,8 +839,9 @@ function Start-Gui {
                 $picture.Image = $null
             }
             $picture.Image = $image
+            $photoPreview.Invalidate()
             $stateLabel.Text = "PASS Vstup načítaný.`nVCF: $([System.IO.Path]::GetFileName($info.vcf))`nFotografia: $([System.IO.Path]::GetFileName($info.photo))"
-            $photoInfo.Text = "Súbor: $([System.IO.Path]::GetFileName($info.photo))`nRozmery: $($image.Width)x$($image.Height)`nVýrez sa nemení. Obrázok sa zobrazuje bez deformácie."
+            $photoInfo.Text = "Súbor: $([System.IO.Path]::GetFileName($info.photo))`nRozmery: $($image.Width)x$($image.Height)`nVýrez: $($fields['photoPosition'].Text)`nKruhový náhľad používa rovnaké centrovanie ako web."
             $slugLabel.Text = "Slug: $($info.broker.slug)"
             $publicUrlLabel.Text = "Verejná URL: https://kvraniak29-blip.github.io/wfm-digital-cards/$($info.broker.slug)/"
             $status.Text = 'PASS Načítané. Skontrolujte údaje alebo generujte.'
@@ -733,6 +896,7 @@ function Start-Gui {
                 throw 'Publikovanie je povolené iba na vetve main. Najskôr zlúčte opravnú vetvu a aktualizujte main.'
             }
 
+            Write-SourceBrokerJson -Folder $pathBox.Text -Broker $broker | Out-Null
             $script:GenerationOverrideFile = Write-BrokerOverride $broker
             $script:GenerationResultFile = Join-Path $LogsDir ("generation-result-{0}-{1}.json" -f $broker.slug, (Get-Date -Format 'yyyyMMdd-HHmmssfff'))
             $powerShell = (Get-Command powershell.exe -ErrorAction Stop).Source
@@ -775,13 +939,13 @@ function Start-Gui {
                     }
 
                     if (-not $result) {
-                        $status.Text = "FAIL Generovanie skončilo bez ResultFile. ExitCode=$exitCode"
+                        $status.Text = "FAIL Generovanie skončilo bez ResultFile. ExitCode=$exitCode`nLog: $LogFile"
                         Write-Log $status.Text
                         return
                     }
 
                     if ($exitCode -ne 0 -or $result.status -ne 'PASS') {
-                        $status.Text = "FAIL $($result.message)"
+                        $status.Text = Format-ResultFailureForGui $result
                         Write-Log $status.Text
                         return
                     }
@@ -920,6 +1084,52 @@ function Start-Gui {
         return
     }
 
+    if ($GuiPhotoPositionSelfTest) {
+        if (-not $BrokerFolder) { throw "-BrokerFolder je povinný pre -GuiPhotoPositionSelfTest." }
+        $script:GuiSelfTestSkipImportTests = $true
+        $form.Show()
+        [System.Windows.Forms.Application]::DoEvents()
+        Load-BrokerIntoForm $BrokerFolder
+        if (-not $picture.Image) { throw 'GUI photo-position self-test: fotografia nie je načítaná.' }
+        if (-not $photoPreview.Visible) { throw 'GUI photo-position self-test: kruhový náhľad nie je viditeľný.' }
+
+        $photoXTrack.Value = 50
+        $photoYTrack.Value = 38
+        Update-PhotoPositionFromSliders
+        [System.Windows.Forms.Application]::DoEvents()
+        if ($fields['photoPosition'].Text -ne '50% 38%') { throw "GUI photo-position self-test: očakávaná pozícia 50% 38%, aktuálne $($fields['photoPosition'].Text)" }
+        if ($photoXLabel.Text -ne 'Horizontálne: 50%') { throw "GUI photo-position self-test: neočakávaný X label $($photoXLabel.Text)" }
+        if ($photoYLabel.Text -ne 'Vertikálne: 38%') { throw "GUI photo-position self-test: neočakávaný Y label $($photoYLabel.Text)" }
+
+        $generateLocal.PerformClick()
+        [System.Windows.Forms.Application]::DoEvents()
+        $deadline = (Get-Date).AddSeconds(90)
+        while ($script:GenerationProcess -and (Get-Date) -lt $deadline) {
+            [System.Windows.Forms.Application]::DoEvents()
+            Start-Sleep -Milliseconds 100
+        }
+        [System.Windows.Forms.Application]::DoEvents()
+        if ($script:GenerationProcess) { throw 'GUI photo-position self-test: generovanie neskončilo v časovom limite.' }
+        if ($status.Text -ne 'PASS Lokálne generovanie bolo dokončené.') { throw "GUI photo-position self-test: neočakávaný stav: $($status.Text)" }
+
+        $sourceBroker = Get-Content -LiteralPath (Join-Path $BrokerFolder 'broker.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($sourceBroker.photoPosition -ne '50% 38%') { throw "GUI photo-position self-test: zdrojový broker.json má $($sourceBroker.photoPosition)" }
+        $canonical = Get-Content -LiteralPath (Join-Path $ProjectRoot "data\brokers\$($sourceBroker.slug).json") -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($canonical.photoPosition -ne '50% 38%') { throw "GUI photo-position self-test: kanonický JSON má $($canonical.photoPosition)" }
+
+        Load-BrokerIntoForm $BrokerFolder
+        if ($fields['photoPosition'].Text -ne '50% 38%') { throw "GUI photo-position self-test: reload vrátil $($fields['photoPosition'].Text)" }
+        if ($photoYTrack.Value -ne 38) { throw "GUI photo-position self-test: reload slider Y vrátil $($photoYTrack.Value)" }
+        Write-Log "PASS GuiPhotoPositionSelfTest slug=$($fields['slug'].Text) photoPosition=$($fields['photoPosition'].Text)"
+        if (-not $Silent) { Write-Host "PASS GuiPhotoPositionSelfTest slug=$($fields['slug'].Text) photoPosition=$($fields['photoPosition'].Text)" }
+        if ($picture.Image) {
+            $picture.Image.Dispose()
+            $picture.Image = $null
+        }
+        $form.Dispose()
+        return
+    }
+
     [void]$form.ShowDialog()
 }
 
@@ -1026,6 +1236,11 @@ try {
         Write-Log 'PASS'
         exit 0
     }
+    if ($GuiPhotoPositionSelfTest) {
+        Start-Gui
+        Write-Log 'PASS'
+        exit 0
+    }
     if ($Generate) {
         if (-not $BrokerFolder) { throw "-BrokerFolder je povinný v automatickom režime." }
         $published = Invoke-GenerateCore -Folder $BrokerFolder -Broker $null -DoPublish ([bool]$Publish) -PreparedOverrideFile $OverrideFile -SkipImportTests ([bool]$SkipImportTests)
@@ -1042,7 +1257,9 @@ try {
     Write-Log ("FAIL " + $_.Exception.Message)
     if ($ResultFile) {
         try {
-            Write-ResultFile -Path $ResultFile -Status 'FAIL' -Slug (Get-ResultSlug $BrokerFolder $OverrideFile) -Published $false -Message $_.Exception.Message
+            $detail = [string]$_.Exception.Message
+            $summary = Get-FailureSummary $detail
+            Write-ResultFile -Path $ResultFile -Status 'FAIL' -Slug (Get-ResultSlug $BrokerFolder $OverrideFile) -Published $false -Message $summary -Detail $detail
         } catch {
             Write-Log ("FAIL ResultFile zápis zlyhal: " + $_.Exception.Message)
         }
