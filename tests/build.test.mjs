@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import sharp from "sharp";
 import jsQR from "jsqr";
 import { PNG } from "pngjs";
@@ -10,10 +11,13 @@ import { validateAll, validateBranding, validatePhotos } from "../scripts/valida
 import { parseVCard } from "../scripts/vcard-parser.mjs";
 
 const results = [];
-const testSlug = "kristian-vraniak";
+const realKristianSlug = "kristian-vraniak";
+const testSlug = "wfm-test-broker";
+const testDisplayName = "WFM Test Broker";
 const workRoot = path.join(root, "work", "tests");
+const protectedBefore = await captureProtectedBrokerFiles();
 
-await cleanupTestBroker();
+await cleanupTestBroker(testSlug);
 
 await test("validácia JSON, company.json a branding", async () => {
   const company = await loadCompany();
@@ -30,6 +34,213 @@ await test("Windows PowerShell generátor je uložený ako UTF-8 BOM", async () 
   const text = ps1.toString("utf8");
   assert.ok(!text.includes("ArgumentList.Add"));
   assert.ok(!text.includes("Invoke-Expression"));
+  assert.ok(!text.includes("BackgroundWorker"));
+  assert.ok(!text.includes("add_DoWork"));
+  assert.ok(!text.includes("add_RunWorkerCompleted"));
+  assert.ok(!text.includes(".DoWork +="));
+  assert.ok(!text.includes(".RunWorkerCompleted +="));
+  assert.ok(text.includes("System.Diagnostics.Process"));
+  assert.ok(text.includes("System.Windows.Forms.Timer"));
+  assert.ok(text.includes("ResultFile"));
+});
+
+await test("Windows PowerShell validácia nevracia null pri nulovom počte chýb", async () => {
+  if (process.platform !== "win32") return;
+  const output = execFileSync("powershell.exe", [
+    "-NoProfile",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-File",
+    "tools/WFM-Card-Generator.ps1",
+    "-ValidationSelfTest",
+    "-Silent"
+  ], { cwd: root, encoding: "utf8" });
+  assert.ok(output.includes("PASS") || output.length === 0);
+  await assertLatestGeneratorLogClean();
+});
+
+await test("Windows PowerShell načítanie priečinka dokončí validáciu aj fotografiu", async () => {
+  if (process.platform !== "win32") return;
+  const folder = await makeFixtureFolder("Windows Load", "jpg", {
+    firstName: "Kristián",
+    lastName: "Vraniak",
+    displayName: "Kristián Vraniak",
+    phoneE164: "+421948104075",
+    email: "kristian.vraniak@wfmreality.sk",
+    whatsapp: "https://wa.me/421948104075",
+    slug: "kristian-vraniak",
+    photoPosition: "50% 42%",
+    social: {
+      facebook: "https://www.facebook.com/WFMReality/",
+      instagram: "https://www.instagram.com/wfmreality.sk/"
+    }
+  });
+  const output = execFileSync("powershell.exe", [
+    "-NoProfile",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-File",
+    "tools/WFM-Card-Generator.ps1",
+    "-BrokerFolder",
+    folder,
+    "-BrokerLoadSelfTest",
+    "-Silent"
+  ], { cwd: root, encoding: "utf8" });
+  assert.ok(output.includes("PASS") || output.length === 0);
+  await assertLatestGeneratorLogClean();
+});
+
+await test("Windows PowerShell GUI self-test načíta fotografiu a aktivuje lokálne generovanie", async () => {
+  if (process.platform !== "win32") return;
+  const folder = await makeFixtureFolder("Windows GUI Load", "jpg", {
+    firstName: "Kristián",
+    lastName: "Vraniak",
+    displayName: "Kristián Vraniak",
+    phoneE164: "+421948104075",
+    email: "kristian.vraniak@wfmreality.sk",
+    whatsapp: "https://wa.me/421948104075",
+    slug: realKristianSlug,
+    photoPosition: "50% 42%",
+    social: {
+      facebook: "https://www.facebook.com/WFMReality/",
+      instagram: "https://www.instagram.com/wfmreality.sk/"
+    }
+  });
+  const output = execFileSync("powershell.exe", [
+    "-NoProfile",
+    "-STA",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-File",
+    "tools/WFM-Card-Generator.ps1",
+    "-BrokerFolder",
+    folder,
+    "-GuiLoadSelfTest",
+    "-Silent"
+  ], { cwd: root, encoding: "utf8" });
+  assert.ok(output.includes("PASS") || output.length === 0);
+  await assertLatestGeneratorLogClean();
+});
+
+await test("Windows PowerShell GUI self-test klikne lokálne generovanie a skončí PASS", async () => {
+  if (process.platform !== "win32") return;
+  await cleanupTestBroker(testSlug);
+  const folder = await makeFixtureFolder("Windows GUI Generate", "jpg", testBrokerOverrides());
+  const output = execFileSync("powershell.exe", [
+    "-NoProfile",
+    "-STA",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-File",
+    "tools/WFM-Card-Generator.ps1",
+    "-BrokerFolder",
+    folder,
+    "-GuiGenerateSelfTest",
+    "-Silent"
+  ], { cwd: root, encoding: "utf8" });
+  assert.ok(output.includes("PASS") || output.length === 0);
+  await assertLatestGeneratorLogClean();
+});
+
+await test("Windows PowerShell child proces vytvorí ResultFile PASS a výstupy", async () => {
+  if (process.platform !== "win32") return;
+  await cleanupTestBroker(testSlug);
+  const folder = await makeFixtureFolder("Windows Child Process", "jpg", testBrokerOverrides());
+  const overrideFile = path.join(workRoot, `override-${Date.now()}.json`);
+  const resultFile = path.join(workRoot, `result-pass-${Date.now()}.json`);
+  await fs.writeFile(overrideFile, `${JSON.stringify(testBrokerOverrides(), null, 2)}\n`, "utf8");
+  const child = spawnSync("powershell.exe", [
+    "-NoProfile",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-File",
+    "tools/WFM-Card-Generator.ps1",
+    "-BrokerFolder",
+    folder,
+    "-OverrideFile",
+    overrideFile,
+    "-ResultFile",
+    resultFile,
+    "-Generate",
+    "-Silent",
+    "-SkipImportTests"
+  ], { cwd: root, encoding: "utf8" });
+  assert.equal(child.status, 0, child.stderr || child.stdout);
+  const result = JSON.parse(await fs.readFile(resultFile, "utf8"));
+  assert.equal(result.status, "PASS");
+  assert.equal(result.slug, testSlug);
+  assert.equal(result.published, false);
+  for (const file of [
+    `dist/${testSlug}/index.html`,
+    `dist/${testSlug}/${testSlug}.vcf`,
+    `dist/${testSlug}/photo.jpg`,
+    `dist/${testSlug}/qr.png`
+  ]) {
+    await fs.access(path.join(root, file));
+  }
+  await assertLatestGeneratorLogClean();
+});
+
+await test("Windows PowerShell child proces vytvorí ResultFile FAIL pri neplatnom vstupe", async () => {
+  if (process.platform !== "win32") return;
+  const resultFile = path.join(workRoot, `result-fail-${Date.now()}.json`);
+  const missingFolder = path.join(workRoot, `missing-${Date.now()}`);
+  const child = spawnSync("powershell.exe", [
+    "-NoProfile",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-File",
+    "tools/WFM-Card-Generator.ps1",
+    "-BrokerFolder",
+    missingFolder,
+    "-ResultFile",
+    resultFile,
+    "-Generate",
+    "-Silent",
+    "-SkipImportTests"
+  ], { cwd: root, encoding: "utf8" });
+  assert.equal(child.status, 1);
+  const result = JSON.parse(await fs.readFile(resultFile, "utf8"));
+  assert.equal(result.status, "FAIL");
+  assert.match(result.message, /Priečinok makléra neexistuje/);
+  assert.notEqual(result.message, "PASS");
+  await assertLatestGeneratorLogClean();
+});
+
+await test("publikovanie je na ne-main vetve blokované cez ResultFile FAIL", async () => {
+  if (process.platform !== "win32") return;
+  const branch = currentGitBranch();
+  if (branch === "main") return;
+  await cleanupTestBroker(testSlug);
+  const folder = await makeFixtureFolder("Windows Publish Block", "jpg", testBrokerOverrides());
+  const resultFile = path.join(workRoot, `result-publish-block-${Date.now()}.json`);
+  const child = spawnSync("powershell.exe", [
+    "-NoProfile",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-File",
+    "tools/WFM-Card-Generator.ps1",
+    "-BrokerFolder",
+    folder,
+    "-ResultFile",
+    resultFile,
+    "-Generate",
+    "-Publish",
+    "-Silent",
+    "-SkipImportTests"
+  ], { cwd: root, encoding: "utf8" });
+  assert.equal(child.status, 1);
+  const result = JSON.parse(await fs.readFile(resultFile, "utf8"));
+  assert.equal(result.status, "FAIL");
+  assert.equal(result.published, true);
+  assert.match(result.message, /Publikovanie je povolené iba na vetve main/);
+  await assertLatestGeneratorLogClean();
+});
+
+await test("cleanup testov odmieta reálne maklérske slugy", async () => {
+  await assert.rejects(() => cleanupTestBroker(realKristianSlug), /Odmietnuté čistenie netestovacieho slugu/);
+  await assert.rejects(() => cleanupTestBroker("jakub-svec"), /Odmietnuté čistenie netestovacieho slugu/);
+  await cleanupTestBroker(testSlug);
 });
 
 await test("validácia fotografií", async () => {
@@ -38,7 +249,7 @@ await test("validácia fotografií", async () => {
 });
 
 await test("slug s diakritikou", async () => {
-  assert.equal(slugify("Kristián Vraniak"), testSlug);
+  assert.equal(slugify("Kristián Vraniak"), realKristianSlug);
 });
 
 await test("VCF parser, zalomené riadky a Base64 fotografia", async () => {
@@ -50,33 +261,33 @@ await test("VCF parser, zalomené riadky a Base64 fotografia", async () => {
 });
 
 await test("import jedného vybraného priečinka JPG", async () => {
-  const folder = await makeFixtureFolder("Kristián Vraniak", "jpg");
+  const folder = await makeFixtureFolder(testDisplayName, "jpg", testBrokerOverrides());
   await runImport(folder);
   const broker = JSON.parse(await fs.readFile(path.join(root, "data", "brokers", `${testSlug}.json`), "utf8"));
   assert.equal(broker.slug, testSlug);
-  assert.equal(broker.displayName, "Kristián Vraniak");
+  assert.equal(broker.displayName, testDisplayName);
   assert.ok((await fs.readFile(path.join(root, "assets", "brokers", testSlug, "photo.jpg")))[0] === 0xff);
 });
 
 await test("aktualizácia existujúceho makléra", async () => {
-  const folder = await makeFixtureFolder("Kristián Vraniak", "jpg", { title: "Senior maklér" });
+  const folder = await makeFixtureFolder(testDisplayName, "jpg", { ...testBrokerOverrides(), title: "Senior testovací maklér" });
   await runImport(folder);
   const broker = JSON.parse(await fs.readFile(path.join(root, "data", "brokers", `${testSlug}.json`), "utf8"));
-  assert.equal(broker.title, "Senior maklér");
+  assert.equal(broker.title, "Senior testovací maklér");
   const status = JSON.parse(await fs.readFile(path.join(root, "data", "status", `${testSlug}.json`), "utf8"));
   assert.ok(status.version >= 2);
 });
 
 await test("import PNG a normalizácia na JPEG", async () => {
-  await cleanupTestBroker();
-  const folder = await makeFixtureFolder("Kristián Vraniak", "png");
+  await cleanupTestBroker(testSlug);
+  const folder = await makeFixtureFolder(testDisplayName, "png", testBrokerOverrides());
   await runImport(folder);
   const photo = await fs.readFile(path.join(root, "assets", "brokers", testSlug, "photo.jpg"));
   assert.ok(photo[0] === 0xff && photo[1] === 0xd8);
 });
 
 await test("konflikt slugu bez potvrdenia aktualizácie", async () => {
-  const folder = await makeFixtureFolder("Kristián Vraniak", "jpg");
+  const folder = await makeFixtureFolder(testDisplayName, "jpg", testBrokerOverrides());
   assert.throws(() => execFileSync(process.execPath, ["scripts/import-broker.mjs", "--folder", folder, "--skip-tests"], { cwd: root, stdio: "pipe" }));
 });
 
@@ -136,7 +347,11 @@ await test("lokálny HTTP server podporuje GitHub Pages basePath", async () => {
   }
 });
 
-await cleanupTestBroker();
+await test("chránené dáta Jakuba a existujúceho Kristiána zostali nezmenené", async () => {
+  await assertProtectedBrokerFilesUnchanged(protectedBefore);
+});
+
+await cleanupTestBroker(testSlug);
 
 for (const item of results) console.log(`${item.ok ? "PASS" : "FAIL"} ${item.name}${item.note ? ` - ${item.note}` : ""}`);
 if (results.some((item) => !item.ok)) process.exit(1);
@@ -203,6 +418,28 @@ async function makeFixtureFolder(name, imageType, overrides = {}) {
   return folder;
 }
 
+function testBrokerOverrides() {
+  return {
+    slug: testSlug,
+    firstName: "WFM",
+    lastName: "Test Broker",
+    displayName: testDisplayName,
+    title: "Testovací maklér",
+    phoneDisplay: "+421 900 111 222",
+    phoneE164: "+421900111222",
+    email: "wfm.test.broker@example.com",
+    whatsapp: "https://wa.me/421900111222"
+  };
+}
+
+function currentGitBranch() {
+  try {
+    return execFileSync("git", ["branch", "--show-current"], { cwd: root, encoding: "utf8" }).trim();
+  } catch {
+    return "";
+  }
+}
+
 function sampleVcf(overrides = {}) {
   const firstName = overrides.firstName ?? "Kristián";
   const lastName = overrides.lastName ?? "Vraniak";
@@ -237,10 +474,62 @@ async function runImport(folder) {
   execFileSync(process.execPath, ["scripts/import-broker.mjs", "--folder", folder, "--yes-update", "--skip-tests"], { cwd: root, stdio: "pipe" });
 }
 
-async function cleanupTestBroker() {
-  await fs.rm(path.join(root, "data", "brokers", `${testSlug}.json`), { force: true });
-  await fs.rm(path.join(root, "data", "status", `${testSlug}.json`), { force: true });
-  await fs.rm(path.join(root, "assets", "brokers", testSlug), { recursive: true, force: true });
+async function cleanupTestBroker(slug) {
+  const protectedSlugs = new Set(["jakub-svec", realKristianSlug]);
+  if (protectedSlugs.has(slug) || !slug.startsWith("wfm-test-")) {
+    throw new Error(`Odmietnuté čistenie netestovacieho slugu: ${slug}`);
+  }
+  await fs.rm(path.join(root, "data", "brokers", `${slug}.json`), { force: true });
+  await fs.rm(path.join(root, "data", "status", `${slug}.json`), { force: true });
+  await fs.rm(path.join(root, "assets", "brokers", slug), { recursive: true, force: true });
+}
+
+async function captureProtectedBrokerFiles() {
+  const files = [
+    protectedFile("jakub-svec", "data/brokers/jakub-svec.json"),
+    protectedFile("jakub-svec", "assets/brokers/jakub-svec/photo.jpg"),
+    protectedFile(realKristianSlug, `data/brokers/${realKristianSlug}.json`),
+    protectedFile(realKristianSlug, `assets/brokers/${realKristianSlug}/photo.jpg`)
+  ];
+  const snapshot = [];
+  for (const item of files) {
+    const file = path.join(root, item.relativePath);
+    const bytes = await fs.readFile(file).catch(() => null);
+    snapshot.push({
+      ...item,
+      existed: Boolean(bytes),
+      hash: bytes ? crypto.createHash("sha256").update(bytes).digest("hex") : null
+    });
+  }
+  return snapshot;
+}
+
+function protectedFile(slug, relativePath) {
+  return { slug, relativePath };
+}
+
+async function assertProtectedBrokerFilesUnchanged(snapshot) {
+  for (const item of snapshot) {
+    const file = path.join(root, item.relativePath);
+    const bytes = await fs.readFile(file).catch(() => null);
+    if (!item.existed) {
+      assert.equal(bytes, null, `${item.relativePath} pred testom neexistoval a test ho nemal vytvoriť`);
+      continue;
+    }
+    assert.ok(bytes, `${item.relativePath} pred testom existoval a po teste chýba`);
+    const hash = crypto.createHash("sha256").update(bytes).digest("hex");
+    assert.equal(hash, item.hash, `${item.relativePath} sa počas testu zmenil`);
+  }
+}
+
+async function assertLatestGeneratorLogClean() {
+  const logsDir = path.join(root, "logs");
+  const files = (await fs.readdir(logsDir).catch(() => [])).filter((file) => /^WFM-Generator-.*\.log$/.test(file));
+  assert.ok(files.length > 0, "Generátor nevytvoril log");
+  const stats = await Promise.all(files.map(async (file) => ({ file, stat: await fs.stat(path.join(logsDir, file)) })));
+  stats.sort((a, b) => b.stat.mtimeMs - a.stat.mtimeMs);
+  const text = await fs.readFile(path.join(logsDir, stats[0].file), "utf8");
+  assert.ok(!/There is no Runspace available|property 'DoWork' cannot be found|property 'Count' cannot be found|Exception setting "Text"/i.test(text));
 }
 
 function unfoldVcf(vcf) {

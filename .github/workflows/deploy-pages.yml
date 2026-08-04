@@ -65,12 +65,24 @@ jobs:
           END:VCARD
           '@ | Set-Content -LiteralPath (Join-Path $fixture 'kontakt.vcf') -Encoding UTF8
 
-          powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\WFM-Card-Generator.ps1 -BrokerFolder $fixture -Generate -Silent
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\WFM-Card-Generator.ps1 -ValidationSelfTest -Silent
+          if ($LASTEXITCODE -ne 0) { throw "Validation self-test exit code: $LASTEXITCODE" }
+
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\WFM-Card-Generator.ps1 -BrokerFolder $fixture -BrokerLoadSelfTest -Silent
+          if ($LASTEXITCODE -ne 0) { throw "Broker load self-test exit code: $LASTEXITCODE" }
+
+          powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\tools\WFM-Card-Generator.ps1 -BrokerFolder $fixture -GuiLoadSelfTest -Silent
+          if ($LASTEXITCODE -ne 0) { throw "GUI load self-test exit code: $LASTEXITCODE" }
+
+          $resultFile = Join-Path $env:RUNNER_TEMP 'wfm-generator-result.json'
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\WFM-Card-Generator.ps1 -BrokerFolder $fixture -ResultFile $resultFile -Generate -Silent -SkipImportTests
           if ($LASTEXITCODE -ne 0) { throw "Generator exit code: $LASTEXITCODE" }
+          $result = Get-Content -LiteralPath $resultFile -Raw -Encoding UTF8 | ConvertFrom-Json
+          if ($result.status -ne 'PASS') { throw "Generator ResultFile status: $($result.status) $($result.message)" }
 
           $latestLog = Get-ChildItem -LiteralPath logs -Filter 'WFM-Generator-*.log' | Sort-Object LastWriteTime -Descending | Select-Object -First 1
           $logText = Get-Content -LiteralPath $latestLog.FullName -Raw -Encoding UTF8
-          if ($logText -match 'ArgumentList|property cannot be found|VybraÅ|prieÄ|GenerovaÅ') { throw "Windows log contains forbidden regression text." }
+          if ($logText -match 'ArgumentList|There is no Runspace available|property cannot be found|Exception setting "Text"|VybraÅ|prieÄ|GenerovaÅ') { throw "Windows log contains forbidden regression text." }
 
           foreach ($file in @(
             'data\brokers\test-makler.json',

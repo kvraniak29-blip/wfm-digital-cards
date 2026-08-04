@@ -185,6 +185,10 @@ Ak publikovanie z Windows aplikácie zlyhá, skontrolujte:
 - či je GitHub CLI prihlásené (`gh auth status`),
 - či workflow GitHub Pages skončil úspechom.
 
+Windows regresné testy kontrolujú aj formulárovú validáciu v PowerShell 5.1. Prázdny zoznam chýb sa musí spracovať ako pole s `Count = 0`, nie ako `$null`, inak sa pri `Set-StrictMode -Version Latest` zobrazí chyba typu `property 'Count' cannot be found`. Načítanie fotografie v GUI používa kópiu v pamäti, aby `PictureBox` nedržal pôvodný súbor zamknutý.
+
+Generovanie z GUI beží v samostatnom child procese `powershell.exe`, nie cez `BackgroundWorker`. GUI proces zostáva vo WinForms vlákne, sleduje child proces cez `System.Windows.Forms.Timer` a výsledok číta z dočasného `ResultFile` JSON. Tento model zabraňuje runspace chybe `There is no Runspace available to run scripts in this thread`.
+
 ## Prepnutie hostingu
 
 Hosting sa prepína iba cez `SITE_URL` a `BASE_PATH`, nie úpravou šablón.
