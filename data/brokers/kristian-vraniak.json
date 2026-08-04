@@ -1,0 +1,20 @@
+{
+  "active": true,
+  "slug": "kristian-vraniak",
+  "firstName": "Kristián",
+  "lastName": "Vraniak",
+  "displayName": "Kristián Vraniak",
+  "title": "Realitný maklér",
+  "company": "WFM Reality",
+  "phoneDisplay": "+421 948 104 075",
+  "phoneE164": "+421948104075",
+  "email": "kristian.vraniak@wfmreality.sk",
+  "website": "https://www.wfmreality.sk/",
+  "whatsapp": "https://wa.me/421948104075",
+  "photo": "assets/brokers/kristian-vraniak/photo.jpg",
+  "photoPosition": "50% 42%",
+  "social": {
+    "facebook": "https://www.facebook.com/WFMReality/",
+    "instagram": "https://www.instagram.com/wfmreality.sk/"
+  }
+}
