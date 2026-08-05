@@ -42,6 +42,8 @@ Postup:
 
 Tlačidlá generovania sú deaktivované, kým nie je načítaný platný priečinok, VCF, fotografia a povinné kontaktné údaje.
 
+Publikovanie z GUI nevyžaduje ručné prepnutie lokálnej vetvy na `main`. Tlačidlo `Vygenerovať a publikovať` najprv dokončí lokálne generovanie vybraného makléra, potom vytvorí dočasný izolovaný Git worktree z aktuálneho `origin/main`, skopíruje iba kanonické súbory daného makléra, spustí validáciu/test/build, vytvorí publikačný PR, počká na checks, zlúči PR a overí produkčnú GitHub Pages URL. Pôvodná vetva, index a lokálne staged súbory zostávajú nedotknuté.
+
 Automatický režim:
 
 ```powershell
@@ -181,8 +183,8 @@ Po pushi do `main` workflow:
 Ak publikovanie z Windows aplikácie zlyhá, skontrolujte:
 
 - posledný log v `logs/WFM-Generator-*.log`,
-- či nie sú v pracovnom strome cudzie necommitnuté zmeny,
 - či je GitHub CLI prihlásené (`gh auth status`),
+- či má používateľ právo vytvárať PR a merge do repozitára,
 - či workflow GitHub Pages skončil úspechom.
 
 Windows regresné testy kontrolujú aj formulárovú validáciu v PowerShell 5.1. Prázdny zoznam chýb sa musí spracovať ako pole s `Count = 0`, nie ako `$null`, inak sa pri `Set-StrictMode -Version Latest` zobrazí chyba typu `property 'Count' cannot be found`. Načítanie fotografie v GUI používa kópiu v pamäti, aby `PictureBox` nedržal pôvodný súbor zamknutý.
