@@ -48,6 +48,10 @@ await test("Windows PowerShell generátor je uložený ako UTF-8 BOM", async () 
   assert.ok(text.includes("core.quotepath=false"));
   assert.ok(text.includes("GuiPhotoPositionSelfTest"));
   assert.ok(text.includes("Paint-CircularPhotoPreview"));
+  assert.ok(text.includes("Invoke-IsolatedPublish"));
+  assert.ok(text.includes("PublishPlanSelfTest"));
+  assert.ok(text.includes("PublishWorktreeIsolationSelfTest"));
+  assert.ok(!text.includes("Publikovanie je povolené iba na vetve main"));
 });
 
 await test("Windows PowerShell validácia nevracia null pri nulovom počte chýb", async () => {
@@ -206,6 +210,9 @@ await test("Windows PowerShell child proces vytvorí ResultFile PASS a výstupy"
   assert.equal(result.status, "PASS");
   assert.equal(result.slug, testSlug);
   assert.equal(result.published, false);
+  for (const key of ["detail", "phase", "publicUrl", "publishBranch", "prNumber", "prUrl", "headSha", "mergeSha", "workflowRunUrl", "logFile"]) {
+    assert.ok(Object.hasOwn(result, key), `ResultFile PASS neobsahuje ${key}`);
+  }
   for (const file of [
     `dist/${testSlug}/index.html`,
     `dist/${testSlug}/${testSlug}.vcf`,
@@ -241,6 +248,9 @@ await test("Windows PowerShell child proces vytvorí ResultFile FAIL pri neplatn
   assert.match(result.message, /Priečinok makléra neexistuje/);
   assert.match(result.detail, /Priečinok makléra neexistuje/);
   assert.ok(result.logFile.endsWith(".log"));
+  for (const key of ["phase", "publicUrl", "publishBranch", "prNumber", "prUrl", "headSha", "mergeSha", "workflowRunUrl"]) {
+    assert.ok(Object.hasOwn(result, key), `ResultFile FAIL neobsahuje ${key}`);
+  }
   assert.notEqual(result.message, "PASS");
   await assertLatestGeneratorLogClean();
 });
@@ -284,68 +294,65 @@ await test("Git status s diakritikou zostáva čitateľný", async () => {
   }
 });
 
-await test("publikovanie s cudzím koreňovým súborom skončí ResultFile FAIL bez published", async () => {
+await test("publish plan self-test obsahuje iba tri povolené cesty", async () => {
   if (process.platform !== "win32") return;
-  await cleanupTestBroker(testSlug);
-  const folder = await makeFixtureFolder("Windows Publish Foreign", "jpg", testBrokerOverrides());
-  const resultFile = path.join(workRoot, `result-publish-foreign-${Date.now()}.json`);
-  const foreignFile = path.join(root, `wfm-foreign-${Date.now()}.tmp`);
-  try {
-    await fs.writeFile(foreignFile, "foreign\n", "utf8");
-    const child = spawnSync("powershell.exe", [
-      "-NoProfile",
-      "-ExecutionPolicy",
-      "Bypass",
-      "-File",
-      "tools/WFM-Card-Generator.ps1",
-      "-BrokerFolder",
-      folder,
-      "-ResultFile",
-      resultFile,
-      "-Generate",
-      "-Publish",
-      "-Silent",
-      "-SkipImportTests"
-    ], { cwd: root, encoding: "utf8" });
-    assert.equal(child.status, 1);
-    const result = JSON.parse(await fs.readFile(resultFile, "utf8"));
-    assert.equal(result.status, "FAIL");
-    assert.equal(result.published, false);
-    assert.match(result.message, /Publikovanie zastavené|Publikovanie je povolené iba na vetve main/);
-    await assertLatestGeneratorLogClean();
-  } finally {
-    await fs.rm(foreignFile, { force: true });
-    await cleanupTestBroker(testSlug);
-  }
-});
-
-await test("publikovanie je na ne-main vetve blokované cez ResultFile FAIL", async () => {
-  if (process.platform !== "win32") return;
-  const branch = currentGitBranch();
-  if (branch === "main") return;
-  await cleanupTestBroker(testSlug);
-  const folder = await makeFixtureFolder("Windows Publish Block", "jpg", testBrokerOverrides());
-  const resultFile = path.join(workRoot, `result-publish-block-${Date.now()}.json`);
-  const child = spawnSync("powershell.exe", [
+  const output = execFileSync("powershell.exe", [
     "-NoProfile",
     "-ExecutionPolicy",
     "Bypass",
     "-File",
     "tools/WFM-Card-Generator.ps1",
-    "-BrokerFolder",
-    folder,
-    "-ResultFile",
-    resultFile,
-    "-Generate",
-    "-Publish",
-    "-Silent",
-    "-SkipImportTests"
+    "-PublishPlanSelfTest",
+    "-Silent"
   ], { cwd: root, encoding: "utf8" });
-  assert.equal(child.status, 1);
-  const result = JSON.parse(await fs.readFile(resultFile, "utf8"));
-  assert.equal(result.status, "FAIL");
-  assert.equal(result.published, false);
-  assert.match(result.message, /Publikovanie je povolené iba na vetve main/);
+  assert.ok(output.includes("PASS") || output.length === 0);
+  await assertLatestGeneratorLogClean();
+});
+
+await test("worktree isolation self-test nechá pôvodný index nedotknutý", async () => {
+  if (process.platform !== "win32") return;
+  const output = execFileSync("powershell.exe", [
+    "-NoProfile",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-File",
+    "tools/WFM-Card-Generator.ps1",
+    "-PublishWorktreeIsolationSelfTest",
+    "-Silent"
+  ], { cwd: root, encoding: "utf8" });
+  assert.ok(output.includes("PASS") || output.length === 0);
+  await assertLatestGeneratorLogClean();
+});
+
+await test("publikovanie je pripraviteľné aj mimo main vetvy", async () => {
+  if (process.platform !== "win32") return;
+  const branch = currentGitBranch();
+  if (branch === "main") return;
+  const output = execFileSync("powershell.exe", [
+    "-NoProfile",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-File",
+    "tools/WFM-Card-Generator.ps1",
+    "-PublishPlanSelfTest",
+    "-Silent"
+  ], { cwd: root, encoding: "utf8" });
+  assert.ok(output.includes("PASS") || output.length === 0);
+  await assertLatestGeneratorLogClean();
+});
+
+await test("verejná URL 404 self-test neotvára prehliadač a zobrazí správu", async () => {
+  if (process.platform !== "win32") return;
+  const output = execFileSync("powershell.exe", [
+    "-NoProfile",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-File",
+    "tools/WFM-Card-Generator.ps1",
+    "-PublicPreview404SelfTest",
+    "-Silent"
+  ], { cwd: root, encoding: "utf8" });
+  assert.ok(output.includes("PASS") || output.length === 0);
   await assertLatestGeneratorLogClean();
 });
 

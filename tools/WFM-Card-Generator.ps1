@@ -10,6 +10,9 @@ param(
     [switch]$GuiLoadSelfTest,
     [switch]$GuiGenerateSelfTest,
     [switch]$GuiPhotoPositionSelfTest,
+    [switch]$PublishPlanSelfTest,
+    [switch]$PublishWorktreeIsolationSelfTest,
+    [switch]$PublicPreview404SelfTest,
     [string]$OverrideFile,
     [string]$ResultFile,
     [switch]$SkipImportTests
@@ -59,7 +62,15 @@ function Write-ResultFile {
         [string]$Slug,
         [bool]$Published = $false,
         [Parameter(Mandatory)][string]$Message,
-        [string]$Detail = ''
+        [string]$Detail = '',
+        [string]$Phase = '',
+        [string]$PublicUrl = '',
+        [string]$PublishBranch = '',
+        [string]$PrNumber = '',
+        [string]$PrUrl = '',
+        [string]$HeadSha = '',
+        [string]$MergeSha = '',
+        [string]$WorkflowRunUrl = ''
     )
 
     $result = [ordered]@{
@@ -68,6 +79,14 @@ function Write-ResultFile {
         published = $Published
         message = $Message
         detail = $Detail
+        phase = $Phase
+        publicUrl = $PublicUrl
+        publishBranch = $PublishBranch
+        prNumber = $PrNumber
+        prUrl = $PrUrl
+        headSha = $HeadSha
+        mergeSha = $MergeSha
+        workflowRunUrl = $WorkflowRunUrl
         logFile = $LogFile
     }
     $json = ($result | ConvertTo-Json -Depth 5)
@@ -107,8 +126,39 @@ function Format-ResultFailureForGui {
     param($Result)
 
     $message = Limit-Text ([string]$Result.message) 260
+    if ($Result.phase) { $message = "[$($Result.phase)] $message" }
     $log = if ($Result.logFile) { [string]$Result.logFile } else { $LogFile }
-    return "FAIL $message`nLog: $log"
+    $extra = if ($Result.prUrl) { "`nPR: $($Result.prUrl)" } else { '' }
+    return "FAIL $message`nLog: $log$extra"
+}
+
+function Invoke-CommandInDirectory {
+    param(
+        [Parameter(Mandatory)][string]$WorkingDirectory,
+        [Parameter(Mandatory)][string]$FilePath,
+        [Parameter()][string[]]$Arguments = @()
+    )
+
+    Write-Log ("RUN [{0}] {1} {2}" -f $WorkingDirectory, $FilePath, ($Arguments -join " "))
+    Push-Location $WorkingDirectory
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $rawOutput = & $FilePath @Arguments 2>&1
+        $exitCode = $LASTEXITCODE
+        $ErrorActionPreference = $previousErrorActionPreference
+        if ($null -eq $exitCode) { $exitCode = 0 }
+        $output = ($rawOutput | ForEach-Object { [string]$_ }) -join [Environment]::NewLine
+        if ($output) { Write-Log $output }
+        if ($exitCode -ne 0) {
+            throw "Príkaz zlyhal s kódom ${exitCode}: $FilePath $($Arguments -join ' ')`n$output"
+        }
+        return $output
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+        Pop-Location
+    }
 }
 
 function Get-ResultSlug {
@@ -141,10 +191,13 @@ function Invoke-ProjectCommand {
 
     Write-Log ("RUN {0} {1}" -f $FilePath, ($Arguments -join " "))
     Push-Location $ProjectRoot
+    $previousErrorActionPreference = $ErrorActionPreference
 
     try {
+        $ErrorActionPreference = 'Continue'
         $rawOutput = & $FilePath @Arguments 2>&1
         $exitCode = $LASTEXITCODE
+        $ErrorActionPreference = $previousErrorActionPreference
         if ($null -eq $exitCode) { $exitCode = 0 }
 
         $output = ($rawOutput | ForEach-Object { [string]$_ }) -join [Environment]::NewLine
@@ -157,6 +210,7 @@ function Invoke-ProjectCommand {
         return $output
     }
     finally {
+        $ErrorActionPreference = $previousErrorActionPreference
         Pop-Location
     }
 }
@@ -387,8 +441,12 @@ function Invoke-GenerateCore {
         }
 
         if ($DoPublish) {
-            Invoke-Publish
-            return $true
+            $slug = Get-ResultSlug $Folder $script:LastOverrideFile
+            $displayName = ''
+            try { $displayName = [string](Get-BrokerFromCanonicalJson -RepoRoot $ProjectRoot -Slug $slug).displayName } catch {}
+            if (-not $displayName -and $Broker -and $Broker.displayName) { $displayName = [string]$Broker.displayName }
+            if (-not $displayName) { $displayName = $slug }
+            return (Invoke-IsolatedPublish -Slug $slug -DisplayName $displayName)
         }
         return $false
     } catch {
@@ -411,46 +469,316 @@ function Get-CurrentGitBranch {
     }
 }
 
-function Test-PublishAllowed {
-    $branch = Get-CurrentGitBranch
-    if ($branch -ne 'main') { throw 'Publikovanie je povolené iba na vetve main. Najskôr zlúčte opravnú vetvu a aktualizujte main.' }
-    $allowed = '^( M|M |A |AM|MM|\?\?) (data/brokers/|data/status/|assets/brokers/|assets/branding/|config/|src/|scripts/|tests/|tools/|README.md|package.json|package-lock.json|\.github/|\.gitignore|Spustit-WFM-Generator.cmd)'
-    $foreign = New-Object System.Collections.Generic.List[string]
-    foreach ($line in Get-GitPorcelain) {
-        $normalized = $line.Replace('\','/')
-        if ($normalized -notmatch $allowed) { $foreign.Add($line) }
-    }
-    if ($foreign.Count -gt 0) { throw "Publikovanie zastavené. Existujú cudzie necommitnuté zmeny:`n$($foreign -join "`n")" }
+function Get-PublishAllowedPaths {
+    param([Parameter(Mandatory)][string]$Slug)
+    return @(
+        "data/brokers/$Slug.json",
+        "data/status/$Slug.json",
+        "assets/brokers/$Slug/photo.jpg"
+    )
 }
 
-function Invoke-Publish {
-    Test-PublishAllowed
-    Invoke-ProjectCommand 'git.exe' @('add', 'data/brokers', 'data/status', 'assets/brokers', 'assets/branding', 'config', 'src', 'scripts', 'tests', 'tools', 'README.md', 'package.json', 'package-lock.json', '.github', '.gitignore', 'Spustit-WFM-Generator.cmd') | Out-Null
-    $pending = Get-GitPorcelain
-    if ($pending.Count -eq 0) {
-        Write-Log 'Publikovanie: nie je čo commitovať.'
-        return
+function Get-PublicBrokerUrl {
+    param([Parameter(Mandatory)][string]$Slug)
+    return "https://kvraniak29-blip.github.io/wfm-digital-cards/$Slug/"
+}
+
+function Get-PublishPlan {
+    param([Parameter(Mandatory)][string]$Slug)
+    $paths = Get-PublishAllowedPaths $Slug
+    foreach ($relative in $paths) {
+        $file = Join-Path $ProjectRoot ($relative -replace '/', [System.IO.Path]::DirectorySeparatorChar)
+        if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "Publikačný súbor neexistuje: $relative" }
     }
-    Invoke-ProjectCommand 'git.exe' @('commit', '-m', 'Update WFM digital card') | Out-Null
-    Invoke-ProjectCommand 'git.exe' @('push', 'origin', 'main') | Out-Null
+    return [pscustomobject]@{
+        slug = $Slug
+        publicUrl = Get-PublicBrokerUrl $Slug
+        allowedPaths = $paths
+    }
+}
 
-    $head = (Invoke-ProjectCommand 'git.exe' @('rev-parse', 'HEAD')).Trim()
-    $runJson = Invoke-ProjectCommand 'gh.exe' @('run', 'list', '--repo', 'kvraniak29-blip/wfm-digital-cards', '--workflow', 'Deploy GitHub Pages', '--commit', $head, '--limit', '1', '--json', 'databaseId,status,conclusion')
-    $run = ($runJson | ConvertFrom-Json | Select-Object -First 1)
-    if (-not $run) { throw 'GitHub Actions run po pushnutí nebol nájdený.' }
-    Write-Log "GitHub Actions run ID: $($run.databaseId)"
+function Assert-PublishPathsOnly {
+    param(
+        [Parameter(Mandatory)][string]$RepoRoot,
+        [Parameter(Mandatory)][string]$Slug
+    )
 
-    for ($i = 0; $i -lt 60; $i++) {
-        $viewJson = Invoke-ProjectCommand 'gh.exe' @('run', 'view', [string]$run.databaseId, '--repo', 'kvraniak29-blip/wfm-digital-cards', '--json', 'status,conclusion')
-        $view = $viewJson | ConvertFrom-Json
-        Write-Log "GitHub Actions: $($view.status) $($view.conclusion)"
-        if ($view.status -eq 'completed') {
-            if ($view.conclusion -ne 'success') { throw "GitHub Actions zlyhal: $($view.conclusion)" }
-            return
+    $allowed = New-Object 'System.Collections.Generic.HashSet[string]'
+    foreach ($path in (Get-PublishAllowedPaths $Slug)) { [void]$allowed.Add($path) }
+    $status = Invoke-CommandInDirectory $RepoRoot 'git.exe' @('-c', 'core.quotepath=false', 'status', '--porcelain=v1', '--untracked-files=all')
+    $lines = @($status -split "`r?`n" | Where-Object { $_.Trim() })
+    foreach ($line in $lines) {
+        $relative = $line.Substring(3).Trim().Replace('\','/')
+        if ($relative -match ' -> ') { $relative = ($relative -split ' -> ')[1] }
+        if (-not $allowed.Contains($relative)) {
+            throw "Publikačný worktree obsahuje nepovolenú cestu: $relative"
+        }
+    }
+}
+
+function Copy-PublishFilesToWorktree {
+    param(
+        [Parameter(Mandatory)][string]$Slug,
+        [Parameter(Mandatory)][string]$DestinationRoot
+    )
+
+    foreach ($relative in (Get-PublishAllowedPaths $Slug)) {
+        $source = Join-Path $ProjectRoot ($relative -replace '/', [System.IO.Path]::DirectorySeparatorChar)
+        $destination = Join-Path $DestinationRoot ($relative -replace '/', [System.IO.Path]::DirectorySeparatorChar)
+        $destinationFolder = Split-Path -Parent $destination
+        New-Item -ItemType Directory -Path $destinationFolder -Force | Out-Null
+        Copy-Item -LiteralPath $source -Destination $destination -Force
+    }
+}
+
+function Get-BrokerFromCanonicalJson {
+    param(
+        [Parameter(Mandatory)][string]$RepoRoot,
+        [Parameter(Mandatory)][string]$Slug
+    )
+    $file = Join-Path $RepoRoot "data\brokers\$Slug.json"
+    if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "Broker JSON neexistuje: $file" }
+    return (Get-Content -LiteralPath $file -Raw -Encoding UTF8 | ConvertFrom-Json)
+}
+
+function Test-BuildContainsBroker {
+    param(
+        [Parameter(Mandatory)][string]$RepoRoot,
+        [Parameter(Mandatory)][string]$Slug
+    )
+
+    $broker = Get-BrokerFromCanonicalJson -RepoRoot $RepoRoot -Slug $Slug
+    $htmlFile = Join-Path $RepoRoot "dist\$Slug\index.html"
+    $photoFile = Join-Path $RepoRoot "dist\$Slug\photo.jpg"
+    $vcfFile = Join-Path $RepoRoot "dist\$Slug\$Slug.vcf"
+    $qrFile = Join-Path $RepoRoot "dist\$Slug\qr.png"
+    foreach ($file in @($htmlFile, $photoFile, $vcfFile, $qrFile)) {
+        if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "Build neobsahuje očakávaný súbor: $file" }
+    }
+    $html = Get-Content -LiteralPath $htmlFile -Raw -Encoding UTF8
+    foreach ($value in @($broker.displayName, $broker.title, $broker.phoneE164, $broker.email, $broker.website)) {
+        if ($value -and -not $html.Contains([string]$value)) { throw "HTML neobsahuje hodnotu: $value" }
+    }
+    $position = if ($broker.photoPosition) { [string]$broker.photoPosition } else { '50% 50%' }
+    if (-not $html.Contains("object-position: $position;")) { throw "HTML nepoužíva photoPosition z JSON: $position" }
+    $vcf = Get-Content -LiteralPath $vcfFile -Raw -Encoding UTF8
+    if (-not $vcf.Contains('PHOTO;ENCODING=b;TYPE=JPEG:')) { throw 'VCF neobsahuje JPEG PHOTO.' }
+    $photoBytes = [System.IO.File]::ReadAllBytes($photoFile)
+    if ($photoBytes.Length -lt 2 -or $photoBytes[0] -ne 0xFF -or $photoBytes[1] -ne 0xD8) { throw 'Fotografia v builde nie je JPEG.' }
+    $qrBytes = [System.IO.File]::ReadAllBytes($qrFile)
+    if ($qrBytes.Length -lt 2 -or $qrBytes[0] -ne 0x89 -or $qrBytes[1] -ne 0x50) { throw 'QR v builde nie je PNG.' }
+}
+
+function Wait-GitHubChecks {
+    param(
+        [Parameter(Mandatory)][string]$PrNumber,
+        [Parameter(Mandatory)][string]$HeadSha,
+        [string[]]$Required = @('build', 'windows-generator-smoke'),
+        [int]$Attempts = 90
+    )
+
+    for ($i = 0; $i -lt $Attempts; $i++) {
+        $json = Invoke-ProjectCommand 'gh.exe' @('pr', 'view', $PrNumber, '--json', 'headRefOid,statusCheckRollup,url')
+        $view = $json | ConvertFrom-Json
+        if ($view.headRefOid -ne $HeadSha) { throw "PR head SHA sa zmenil: $($view.headRefOid)" }
+        $pending = @()
+        foreach ($name in $Required) {
+            $check = @($view.statusCheckRollup | Where-Object { $_.name -eq $name } | Select-Object -First 1)
+            if (-not $check) { $pending += $name; continue }
+            if ($check.conclusion -eq 'FAILURE' -or $check.conclusion -eq 'CANCELLED' -or $check.conclusion -eq 'TIMED_OUT') {
+                throw "GitHub check zlyhal: $name $($check.conclusion) $($check.detailsUrl)"
+            }
+            if ($check.status -ne 'COMPLETED' -or $check.conclusion -ne 'SUCCESS') { $pending += $name }
+        }
+        if ($pending.Count -eq 0) { return $view }
+        Start-Sleep -Seconds 10
+    }
+    throw 'GitHub checks nedokončili v časovom limite.'
+}
+
+function Wait-MainWorkflow {
+    param(
+        [Parameter(Mandatory)][string]$MergeSha,
+        [int]$Attempts = 90
+    )
+
+    for ($i = 0; $i -lt $Attempts; $i++) {
+        $listJson = Invoke-ProjectCommand 'gh.exe' @('run', 'list', '--branch', 'main', '--commit', $MergeSha, '--limit', '5', '--json', 'databaseId,status,conclusion,url')
+        $run = @($listJson | ConvertFrom-Json | Select-Object -First 1)
+        if ($run) {
+            $viewJson = Invoke-ProjectCommand 'gh.exe' @('run', 'view', [string]$run.databaseId, '--json', 'status,conclusion,jobs,url')
+            $view = $viewJson | ConvertFrom-Json
+            if ($view.status -eq 'completed') {
+                if ($view.conclusion -ne 'success') { throw "Main workflow zlyhal: $($view.conclusion) $($view.url)" }
+                foreach ($name in @('build', 'windows-generator-smoke', 'deploy')) {
+                    $job = @($view.jobs | Where-Object { $_.name -eq $name } | Select-Object -First 1)
+                    if (-not $job -or $job.conclusion -ne 'success') { throw "Main workflow job nie je SUCCESS: $name" }
+                }
+                return $view
+            }
         }
         Start-Sleep -Seconds 10
     }
-    throw 'GitHub Actions nedokončil v časovom limite.'
+    throw 'Main workflow nedokončil v časovom limite.'
+}
+
+function Test-PublicCard {
+    param([Parameter(Mandatory)][string]$Slug)
+    $url = Get-PublicBrokerUrl $Slug
+    $response = Invoke-WebRequest -UseBasicParsing -Uri $url -TimeoutSec 20
+    if ($response.StatusCode -ne 200) { throw "Verejná vizitka nevrátila HTTP 200: $($response.StatusCode)" }
+    foreach ($suffix in @('photo.jpg', "$Slug.vcf", 'qr.png')) {
+        $asset = Invoke-WebRequest -UseBasicParsing -Uri ($url + $suffix) -TimeoutSec 20
+        if ($asset.StatusCode -ne 200) { throw "Verejný súbor nevrátil HTTP 200: $suffix $($asset.StatusCode)" }
+    }
+}
+
+function Test-PublicUrlAvailable {
+    param([Parameter(Mandatory)][string]$Slug)
+    $url = Get-PublicBrokerUrl $Slug
+    try {
+        $response = Invoke-WebRequest -UseBasicParsing -Method Head -Uri $url -TimeoutSec 10
+        return [pscustomobject]@{ StatusCode = [int]$response.StatusCode; Url = $url }
+    } catch {
+        $statusCode = 0
+        if ($_.Exception.Response -and $_.Exception.Response.StatusCode) { $statusCode = [int]$_.Exception.Response.StatusCode }
+        return [pscustomobject]@{ StatusCode = $statusCode; Url = $url }
+    }
+}
+
+function Get-PublicPreviewMessage {
+    param(
+        [Parameter(Mandatory)][int]$StatusCode,
+        [Parameter(Mandatory)][string]$Url
+    )
+    if ($StatusCode -eq 200) { return "PASS Verejná vizitka: $Url" }
+    if ($StatusCode -eq 404) { return 'Vizitka zatiaľ nie je publikovaná.' }
+    return "FAIL Verejná URL nevrátila HTTP 200. Status=$StatusCode"
+}
+
+function Invoke-IsolatedPublish {
+    param(
+        [Parameter(Mandatory)][string]$Slug,
+        [Parameter(Mandatory)][string]$DisplayName
+    )
+
+    $phase = 'PREFLIGHT'
+    $worktree = $null
+    $publishBranch = $null
+    $prNumber = ''
+    $prUrl = ''
+    $headSha = ''
+    $mergeSha = ''
+    $workflowUrl = ''
+    $beforeStatus = (Invoke-ProjectCommand 'git.exe' @('-c', 'core.quotepath=false', 'status', '--porcelain=v1'))
+    $beforeBranch = Get-CurrentGitBranch
+    Write-Log "PUBLISH originalBranch=$beforeBranch"
+    Write-Log "PUBLISH originalStatus=$beforeStatus"
+    try {
+        $plan = Get-PublishPlan $Slug
+        foreach ($tool in @('git.exe', 'gh.exe', (Get-NodeExe), (Get-NpmExe))) {
+            Get-Command $tool -ErrorAction Stop | Out-Null
+        }
+
+        $phase = 'WORKTREE'
+        Invoke-ProjectCommand 'git.exe' @('fetch', 'origin', 'main') | Out-Null
+        $timestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+        $safeSlug = $Slug -replace '[^a-zA-Z0-9-]', '-'
+        $publishBranch = "publish/$safeSlug-$timestamp"
+        $worktreeRoot = Join-Path $ProjectRoot 'work\publish-worktrees'
+        New-Item -ItemType Directory -Path $worktreeRoot -Force | Out-Null
+        $worktree = Join-Path $worktreeRoot "$safeSlug-$timestamp"
+        Invoke-ProjectCommand 'git.exe' @('worktree', 'add', $worktree, 'origin/main') | Out-Null
+        Invoke-CommandInDirectory $worktree 'git.exe' @('switch', '-c', $publishBranch) | Out-Null
+        Copy-PublishFilesToWorktree -Slug $Slug -DestinationRoot $worktree
+        Assert-PublishPathsOnly -RepoRoot $worktree -Slug $Slug
+
+        $phase = 'VALIDATE'
+        Invoke-CommandInDirectory $worktree (Get-NpmExe) @('ci') | Out-Null
+        Invoke-CommandInDirectory $worktree (Get-NpmExe) @('run', 'validate') | Out-Null
+        $phase = 'TEST'
+        Invoke-CommandInDirectory $worktree (Get-NpmExe) @('test') | Out-Null
+        $phase = 'BUILD'
+        Invoke-CommandInDirectory $worktree (Get-NpmExe) @('run', 'build:github-pages') | Out-Null
+        Test-BuildContainsBroker -RepoRoot $worktree -Slug $Slug
+
+        $phase = 'COMMIT'
+        Invoke-CommandInDirectory $worktree 'git.exe' @('add', '--', "data/brokers/$Slug.json", "data/status/$Slug.json", "assets/brokers/$Slug/photo.jpg") | Out-Null
+        Assert-PublishPathsOnly -RepoRoot $worktree -Slug $Slug
+        $pending = Invoke-CommandInDirectory $worktree 'git.exe' @('-c', 'core.quotepath=false', 'status', '--porcelain=v1')
+        if (-not $pending.Trim()) { throw 'Publikovanie nemá žiadne zmeny na commit.' }
+        Invoke-CommandInDirectory $worktree 'git.exe' @('commit', '-m', "Publish $DisplayName digital card") | Out-Null
+        $headSha = (Invoke-CommandInDirectory $worktree 'git.exe' @('rev-parse', 'HEAD')).Trim()
+
+        $phase = 'PUSH'
+        Invoke-CommandInDirectory $worktree 'git.exe' @('push', '-u', 'origin', $publishBranch) | Out-Null
+
+        $phase = 'PR'
+        $body = @(
+            "Slug: $Slug",
+            "Verejná URL: $($plan.publicUrl)",
+            "photoPosition: $((Get-BrokerFromCanonicalJson -RepoRoot $worktree -Slug $Slug).photoPosition)",
+            "validate/test/build: PASS",
+            "Publikované cesty:",
+            "- data/brokers/$Slug.json",
+            "- data/status/$Slug.json",
+            "- assets/brokers/$Slug/photo.jpg"
+        ) -join [Environment]::NewLine
+        $prOutput = Invoke-CommandInDirectory $worktree 'gh.exe' @('pr', 'create', '--base', 'main', '--head', $publishBranch, '--title', "Publish $DisplayName digital card", '--body', $body)
+        $prUrl = ($prOutput -split "`r?`n" | Where-Object { $_ -match '^https://github.com/' } | Select-Object -First 1).Trim()
+        if (-not $prUrl) { throw 'GitHub PR URL nebola vytvorená.' }
+        $prNumber = [regex]::Match($prUrl, '/pull/(\d+)').Groups[1].Value
+
+        $phase = 'CHECKS'
+        Wait-GitHubChecks -PrNumber $prNumber -HeadSha $headSha | Out-Null
+
+        $phase = 'MERGE'
+        $viewJson = Invoke-CommandInDirectory $worktree 'gh.exe' @('pr', 'view', $prNumber, '--json', 'headRefOid')
+        $view = $viewJson | ConvertFrom-Json
+        if ($view.headRefOid -ne $headSha) { throw "PR head SHA sa pred merge zmenil: $($view.headRefOid)" }
+        Invoke-CommandInDirectory $worktree 'gh.exe' @('pr', 'merge', $prNumber, '--merge') | Out-Null
+        $mergedJson = Invoke-CommandInDirectory $worktree 'gh.exe' @('pr', 'view', $prNumber, '--json', 'mergeCommit,state,mergedAt,url')
+        $merged = $mergedJson | ConvertFrom-Json
+        if ($merged.state -ne 'MERGED' -or -not $merged.mergeCommit.oid) { throw 'PR nebol zlúčený.' }
+        $mergeSha = [string]$merged.mergeCommit.oid
+
+        $phase = 'DEPLOY'
+        $workflow = Wait-MainWorkflow -MergeSha $mergeSha
+        $workflowUrl = [string]$workflow.url
+
+        $phase = 'VERIFY'
+        Test-PublicCard -Slug $Slug
+
+        return [pscustomobject]@{
+            status = 'PASS'
+            published = $true
+            message = 'Vizitka bola úspešne publikovaná.'
+            slug = $Slug
+            publicUrl = $plan.publicUrl
+            publishBranch = $publishBranch
+            prNumber = $prNumber
+            prUrl = $prUrl
+            headSha = $headSha
+            mergeSha = $mergeSha
+            workflowRunUrl = $workflowUrl
+        }
+    } catch {
+        $detail = [string]$_.Exception.Message
+        throw "[PUBLISH_PHASE=$phase] $detail"
+    } finally {
+        if ($worktree -and (Test-Path -LiteralPath $worktree)) {
+            try { Invoke-ProjectCommand 'git.exe' @('worktree', 'remove', '--force', $worktree) | Out-Null } catch { Write-Log "WARN worktree remove zlyhal: $($_.Exception.Message)" }
+        }
+        if ($publishBranch) {
+            try { Invoke-ProjectCommand 'git.exe' @('branch', '-D', $publishBranch) | Out-Null } catch {}
+        }
+        $afterStatus = (Invoke-ProjectCommand 'git.exe' @('-c', 'core.quotepath=false', 'status', '--porcelain=v1'))
+        if ($afterStatus -ne $beforeStatus) {
+            Write-Log "WARN Stav pôvodného repozitára sa zmenil počas publish kroku."
+            Write-Log "BEFORE: $beforeStatus"
+            Write-Log "AFTER: $afterStatus"
+        }
+    }
 }
 
 function Test-PortOpen {
@@ -791,7 +1119,7 @@ function Start-Gui {
         $errors = @(Test-FieldValues $broker)
         $ok = $errors.Count -eq 0 -and (Test-Path -LiteralPath $script:LastBrokerInfo.vcf) -and (Test-Path -LiteralPath $script:LastBrokerInfo.photo)
         $generateLocal.Enabled = $ok
-        $generatePublish.Enabled = $ok -and ((Get-CurrentGitBranch) -eq 'main')
+        $generatePublish.Enabled = $ok
         $localPreview.Enabled = [bool]$broker.slug
         $publicPreview.Enabled = [bool]$broker.slug
         if (-not $ok -and $errors.Count -gt 0) { $status.Text = 'FAIL ' + ($errors[0]) }
@@ -886,16 +1214,12 @@ function Start-Gui {
             return
         }
         if ($DoPublish) {
-            $message = "Maklér: $($broker.displayName)`nSlug: $($broker.slug)`nRepozitár: kvraniak29-blip/wfm-digital-cards`nCieľová vetva: main`n`nPokračovať v publikovaní?"
+            $message = "Maklér: $($broker.displayName)`nSlug: $($broker.slug)`nRepozitár: kvraniak29-blip/wfm-digital-cards`n`nPublikovanie prebehne bezpečne cez izolovanú vetvu z origin/main.`n`nPokračovať v publikovaní?"
             $answer = [System.Windows.Forms.MessageBox]::Show($message, 'Potvrdenie publikovania', 'YesNo', 'Warning')
             if ($answer -ne 'Yes') { return }
         }
 
         try {
-            if ($DoPublish -and (Get-CurrentGitBranch) -ne 'main') {
-                throw 'Publikovanie je povolené iba na vetve main. Najskôr zlúčte opravnú vetvu a aktualizujte main.'
-            }
-
             Write-SourceBrokerJson -Folder $pathBox.Text -Broker $broker | Out-Null
             $script:GenerationOverrideFile = Write-BrokerOverride $broker
             $script:GenerationResultFile = Join-Path $LogsDir ("generation-result-{0}-{1}.json" -f $broker.slug, (Get-Date -Format 'yyyyMMdd-HHmmssfff'))
@@ -951,7 +1275,11 @@ function Start-Gui {
                     }
 
                     $status.Text = "PASS $($result.message)"
-                    $stateLabel.Text = 'PASS Výstup bol úspešne vytvorený.'
+                    if ($result.published -and $result.publicUrl) {
+                        $stateLabel.Text = "PASS Vizitka bola publikovaná.`nURL: $($result.publicUrl)"
+                    } else {
+                        $stateLabel.Text = 'PASS Výstup bol úspešne vytvorený.'
+                    }
                     if ($script:GenerationOverrideFile -and (Test-Path -LiteralPath $script:GenerationOverrideFile)) {
                         Remove-Item -LiteralPath $script:GenerationOverrideFile -Force
                     }
@@ -981,7 +1309,7 @@ function Start-Gui {
             $script:GenerationProcess = $process
             $script:GenerationTimer = $timer
             $script:CurrentPublishMode = $DoPublish
-            $status.Text = if ($DoPublish) { 'Generujem a publikujem...' } else { 'Generujem lokálne...' }
+            $status.Text = if ($DoPublish) { 'Generujem a publikujem cez izolovaný worktree...' } else { 'Generujem lokálne...' }
             Set-UiBusy $true
             if (-not $process.Start()) { throw 'Generovanie sa nepodarilo spustiť.' }
             $timer.Start()
@@ -1014,8 +1342,20 @@ function Start-Gui {
         }
     })
     $publicPreview.Add_Click({
-        $slug = $fields['slug'].Text.Trim()
-        if ($slug) { Start-Process "https://kvraniak29-blip.github.io/wfm-digital-cards/$slug/" }
+        try {
+            $slug = $fields['slug'].Text.Trim()
+            if (-not $slug) { return }
+            $check = Test-PublicUrlAvailable -Slug $slug
+            if ($check.StatusCode -eq 200) {
+                Start-Process $check.Url
+                $status.Text = Get-PublicPreviewMessage -StatusCode $check.StatusCode -Url $check.Url
+            } else {
+                $status.Text = Get-PublicPreviewMessage -StatusCode $check.StatusCode -Url $check.Url
+            }
+        } catch {
+            $status.Text = "FAIL $($_.Exception.Message)"
+            Write-Log $status.Text
+        }
     })
     $openLog.Add_Click({ if (Test-Path -LiteralPath $LogFile) { Start-Process $LogFile } })
     $openOutput.Add_Click({ if (Test-Path -LiteralPath $script:LastOutputFolder) { Start-Process $script:LastOutputFolder } })
@@ -1212,6 +1552,100 @@ function Invoke-BrokerLoadSelfTest {
     }
 }
 
+function Invoke-PublishPlanSelfTest {
+    $plan = Get-PublishPlan 'stanislav-penxa'
+    $expected = @(
+        'data/brokers/stanislav-penxa.json',
+        'data/status/stanislav-penxa.json',
+        'assets/brokers/stanislav-penxa/photo.jpg'
+    )
+    if ($plan.allowedPaths.Count -ne 3) { throw "Publish plan má neočakávaný počet ciest: $($plan.allowedPaths.Count)" }
+    foreach ($path in $expected) {
+        if ($plan.allowedPaths -notcontains $path) { throw "Publish plan neobsahuje očakávanú cestu: $path" }
+    }
+    foreach ($path in $plan.allowedPaths) {
+        if ($path -match 'dist/|logs/|work/|node_modules|Makléri') { throw "Publish plan obsahuje nepovolenú cestu: $path" }
+    }
+    Write-Log "PASS PublishPlanSelfTest slug=$($plan.slug) paths=$($plan.allowedPaths -join ',')"
+    if (-not $Silent) { Write-Host "PASS PublishPlanSelfTest slug=$($plan.slug)" }
+}
+
+function Invoke-PublicPreview404SelfTest {
+    $message = Get-PublicPreviewMessage -StatusCode 404 -Url 'https://example.invalid/wfm-test/'
+    if ($message -ne 'Vizitka zatiaľ nie je publikovaná.') { throw "Neoèakávaná 404 správa: $message" }
+    $ok = Get-PublicPreviewMessage -StatusCode 200 -Url 'https://example.invalid/wfm-test/'
+    if ($ok -notmatch '^PASS Verejná vizitka:') { throw "Neoèakávaná 200 správa: $ok" }
+    Write-Log 'PASS PublicPreview404SelfTest'
+    if (-not $Silent) { Write-Host 'PASS PublicPreview404SelfTest' }
+}
+
+function Invoke-PublishWorktreeIsolationSelfTest {
+    $slug = 'wfm-test-publish-isolation'
+    $base = Join-Path $ProjectRoot ("work\tests\publish-isolation-{0}" -f (Get-Date -Format 'yyyyMMddHHmmssfff'))
+    $remote = Join-Path $base 'remote.git'
+    $repo = Join-Path $base 'repo'
+    $wt = Join-Path $base 'publish-worktree'
+    New-Item -ItemType Directory -Path $base -Force | Out-Null
+    try {
+        Invoke-CommandInDirectory $base 'git.exe' @('init', '--bare', $remote) | Out-Null
+        Invoke-CommandInDirectory $base 'git.exe' @('init', $repo) | Out-Null
+        Invoke-CommandInDirectory $repo 'git.exe' @('config', 'user.email', 'test@example.com') | Out-Null
+        Invoke-CommandInDirectory $repo 'git.exe' @('config', 'user.name', 'WFM Test') | Out-Null
+        Set-Content -LiteralPath (Join-Path $repo 'README.md') -Value "test repo" -Encoding UTF8
+        Invoke-CommandInDirectory $repo 'git.exe' @('add', 'README.md') | Out-Null
+        Invoke-CommandInDirectory $repo 'git.exe' @('commit', '-m', 'Initial') | Out-Null
+        Invoke-CommandInDirectory $repo 'git.exe' @('branch', '-M', 'main') | Out-Null
+        Invoke-CommandInDirectory $repo 'git.exe' @('remote', 'add', 'origin', $remote) | Out-Null
+
+        $allowed = @(
+            "data\brokers\$slug.json",
+            "data\status\$slug.json",
+            "assets\brokers\$slug\photo.jpg"
+        )
+        foreach ($relative in $allowed) {
+            $file = Join-Path $repo $relative
+            New-Item -ItemType Directory -Path (Split-Path -Parent $file) -Force | Out-Null
+            if ($relative -like '*.jpg') {
+                [System.IO.File]::WriteAllBytes($file, [byte[]](0xFF,0xD8,0xFF,0xD9))
+            } else {
+                Set-Content -LiteralPath $file -Value "{}" -Encoding UTF8
+            }
+        }
+        Set-Content -LiteralPath (Join-Path $repo 'unrelated.txt') -Value 'staged user file' -Encoding UTF8
+        Invoke-CommandInDirectory $repo 'git.exe' @('add', 'unrelated.txt') | Out-Null
+        $before = Invoke-CommandInDirectory $repo 'git.exe' @('-c', 'core.quotepath=false', 'status', '--porcelain=v1')
+
+        Invoke-CommandInDirectory $repo 'git.exe' @('worktree', 'add', '--detach', $wt, 'HEAD') | Out-Null
+        Invoke-CommandInDirectory $wt 'git.exe' @('switch', '-c', "publish/$slug-test") | Out-Null
+        foreach ($relative in $allowed) {
+            $source = Join-Path $repo $relative
+            $destination = Join-Path $wt $relative
+            New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force | Out-Null
+            Copy-Item -LiteralPath $source -Destination $destination -Force
+        }
+        Assert-PublishPathsOnly -RepoRoot $wt -Slug $slug
+        Invoke-CommandInDirectory $wt 'git.exe' @('add', '--', "data/brokers/$slug.json", "data/status/$slug.json", "assets/brokers/$slug/photo.jpg") | Out-Null
+        Invoke-CommandInDirectory $wt 'git.exe' @('config', 'user.email', 'test@example.com') | Out-Null
+        Invoke-CommandInDirectory $wt 'git.exe' @('config', 'user.name', 'WFM Test') | Out-Null
+        Invoke-CommandInDirectory $wt 'git.exe' @('commit', '-m', "Publish Test digital card") | Out-Null
+        $committed = Invoke-CommandInDirectory $wt 'git.exe' @('show', '--name-only', '--pretty=format:', 'HEAD')
+        foreach ($relative in @("data/brokers/$slug.json", "data/status/$slug.json", "assets/brokers/$slug/photo.jpg")) {
+            if ($committed -notmatch [regex]::Escape($relative)) { throw "Commit neobsahuje očakávanú cestu: $relative" }
+        }
+        if ($committed -match 'unrelated|dist/|logs/|work/|node_modules') { throw "Commit obsahuje nepovolenú cestu: $committed" }
+        $after = Invoke-CommandInDirectory $repo 'git.exe' @('-c', 'core.quotepath=false', 'status', '--porcelain=v1')
+        if ($before -ne $after) { throw "Pôvodný index sa zmenil.`nBEFORE=$before`nAFTER=$after" }
+        Write-Log 'PASS PublishWorktreeIsolationSelfTest'
+        if (-not $Silent) { Write-Host 'PASS PublishWorktreeIsolationSelfTest' }
+    }
+    finally {
+        if (Test-Path -LiteralPath $wt) {
+            try { Invoke-CommandInDirectory $repo 'git.exe' @('worktree', 'remove', '--force', $wt) | Out-Null } catch {}
+        }
+        if (Test-Path -LiteralPath $base) { Remove-Item -LiteralPath $base -Recurse -Force }
+    }
+}
+
 try {
     Write-Log "START ProjectRoot=$ProjectRoot PowerShell=$($PSVersionTable.PSVersion)"
     Remove-OldLogs
@@ -1241,11 +1675,40 @@ try {
         Write-Log 'PASS'
         exit 0
     }
+    if ($PublishPlanSelfTest) {
+        Invoke-PublishPlanSelfTest
+        Write-Log 'PASS'
+        exit 0
+    }
+    if ($PublishWorktreeIsolationSelfTest) {
+        Invoke-PublishWorktreeIsolationSelfTest
+        Write-Log 'PASS'
+        exit 0
+    }
+    if ($PublicPreview404SelfTest) {
+        Invoke-PublicPreview404SelfTest
+        Write-Log 'PASS'
+        exit 0
+    }
     if ($Generate) {
         if (-not $BrokerFolder) { throw "-BrokerFolder je povinný v automatickom režime." }
         $published = Invoke-GenerateCore -Folder $BrokerFolder -Broker $null -DoPublish ([bool]$Publish) -PreparedOverrideFile $OverrideFile -SkipImportTests ([bool]$SkipImportTests)
         if ($ResultFile) {
-            Write-ResultFile -Path $ResultFile -Status 'PASS' -Slug (Get-ResultSlug $BrokerFolder $OverrideFile) -Published ([bool]$published) -Message $(if ($published) { 'Vizitka bola vygenerovaná a publikovaná.' } else { 'Lokálne generovanie bolo dokončené.' })
+            $isPublished = [bool]$published
+            $message = if ($isPublished) { [string]$published.message } else { 'Lokálne generovanie bolo dokončené.' }
+            Write-ResultFile `
+                -Path $ResultFile `
+                -Status 'PASS' `
+                -Slug (Get-ResultSlug $BrokerFolder $OverrideFile) `
+                -Published $isPublished `
+                -Message $message `
+                -PublicUrl $(if ($isPublished) { [string]$published.publicUrl } else { '' }) `
+                -PublishBranch $(if ($isPublished) { [string]$published.publishBranch } else { '' }) `
+                -PrNumber $(if ($isPublished) { [string]$published.prNumber } else { '' }) `
+                -PrUrl $(if ($isPublished) { [string]$published.prUrl } else { '' }) `
+                -HeadSha $(if ($isPublished) { [string]$published.headSha } else { '' }) `
+                -MergeSha $(if ($isPublished) { [string]$published.mergeSha } else { '' }) `
+                -WorkflowRunUrl $(if ($isPublished) { [string]$published.workflowRunUrl } else { '' })
         }
         Write-Log 'PASS'
         if (-not $Silent) { Write-Host "PASS. Log: $LogFile" }
@@ -1258,8 +1721,14 @@ try {
     if ($ResultFile) {
         try {
             $detail = [string]$_.Exception.Message
+            $phase = ''
+            $match = [regex]::Match($detail, '^\[PUBLISH_PHASE=([A-Z]+)\]\s*(.*)$', [System.Text.RegularExpressions.RegexOptions]::Singleline)
+            if ($match.Success) {
+                $phase = $match.Groups[1].Value
+                $detail = $match.Groups[2].Value
+            }
             $summary = Get-FailureSummary $detail
-            Write-ResultFile -Path $ResultFile -Status 'FAIL' -Slug (Get-ResultSlug $BrokerFolder $OverrideFile) -Published $false -Message $summary -Detail $detail
+            Write-ResultFile -Path $ResultFile -Status 'FAIL' -Slug (Get-ResultSlug $BrokerFolder $OverrideFile) -Published $false -Message $summary -Detail $detail -Phase $phase
         } catch {
             Write-Log ("FAIL ResultFile zápis zlyhal: " + $_.Exception.Message)
         }
